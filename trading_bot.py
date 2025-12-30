@@ -231,14 +231,17 @@ class TradingBot:
     def _load_historical_bars(self):
         """Load historical bars to initialize the signal detector"""
         try:
-            num_bars = self.config.signal.length_period + 10  # Extra bars for safety
+            # Load full day of bars to capture Opening Range (9:30-10:00 AM)
+            # A full RTH day is about 78 bars (6.5 hours * 12 bars/hour)
+            # We load more to ensure we get OR period
+            num_bars = max(self.config.signal.length_period + 10, 100)  # At least 100 bars
             logger.info(f"Loading last {num_bars} bars to initialize detector...")
             
             bars = self.client.get_recent_bars(
                 symbol=self.config.trading.symbol,
                 num_bars=num_bars,
                 bar_minutes=5,
-                extended_hours=True  # Include globex/extended hours
+                extended_hours=False  # RTH only for cleaner data
             )
             
             if not bars:
@@ -246,6 +249,18 @@ class TradingBot:
                 return
             
             logger.info(f"Loaded {len(bars)} historical bars")
+            
+            # Check if we have OR period bars (9:30 - 10:00 AM)
+            today = date.today()
+            or_bars = [b for b in bars if b['datetime'].date() == today 
+                       and b['datetime'].hour == 9 and b['datetime'].minute >= 30]
+            or_bars += [b for b in bars if b['datetime'].date() == today 
+                        and b['datetime'].hour == 10 and b['datetime'].minute == 0]
+            
+            if or_bars:
+                logger.info(f"Found {len(or_bars)} Opening Range bars from today")
+            else:
+                logger.warning("No Opening Range bars found - OR bias may be incorrect")
             
             # Feed bars to detector WITH suppress_signals=True
             # This builds up the value area context without triggering trades

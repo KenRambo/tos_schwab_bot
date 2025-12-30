@@ -260,12 +260,25 @@ class SignalDetector:
             if bar.low < self.or_low:
                 self.or_low = bar.low
         elif bar_time >= or_end and not self.or_complete:
-            # OR period just ended
+            # OR period just ended or we started after OR period
             self.or_complete = True
-            logger.info(f"Opening Range complete: High={self.or_high:.2f}, Low={self.or_low:.2f}")
+            
+            # Check if we actually captured OR data
+            if self.or_high > 0 and self.or_low < float('inf'):
+                logger.info(f"Opening Range complete: High={self.or_high:.2f}, Low={self.or_low:.2f}")
+            else:
+                # We missed the OR period - use current value area as fallback
+                logger.warning("Opening Range not captured (started after 10:00 AM)")
+                logger.warning("Using Value Area as OR proxy - consider disabling OR bias filter")
+                # Set OR to value area levels as a reasonable fallback
+                va = self._calculate_value_area()
+                if va.vah > 0:
+                    self.or_high = va.vah
+                    self.or_low = va.val
+                    logger.info(f"OR proxy from VA: High={self.or_high:.2f}, Low={self.or_low:.2f}")
         
-        # Update OR bias if complete
-        if self.or_complete:
+        # Update OR bias if complete and valid
+        if self.or_complete and self.or_high > 0 and self.or_low < float('inf'):
             if bar.close > self.or_high + self.or_buffer_points:
                 self.or_bias = 1  # Bullish
                 if self.first_breakout_dir == 0:

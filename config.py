@@ -34,7 +34,7 @@ class TradingConfig:
     hold_until_opposite_signal: bool = True  # Match your ToS strategy
     
     # Position Sizing - Fixed Fractional
-    use_fixed_fractional: bool = True  # Size based on account balance
+    use_fixed_fractional: bool = False  # Size based on account balance
     risk_percent_per_trade: float = 20.0  # Risk X% of account per trade
     max_position_size: int = 10  # Never exceed X contracts regardless of account size
     min_position_size: int = 1  # Always trade at least X contracts
@@ -98,7 +98,7 @@ class SignalConfig:
     # Confirmation
     min_confirmation_bars: int = 2
     sustained_bars_required: int = 3
-    signal_cooldown_bars: int = 8
+    signal_cooldown_bars: int = 0
     
     # Opening range bias
     use_or_bias_filter: bool = True
