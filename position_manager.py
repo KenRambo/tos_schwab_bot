@@ -95,6 +95,8 @@ class PositionManager:
         # Delta targeting
         use_delta_targeting: bool = True,
         target_delta: float = 0.30,
+        afternoon_delta: float = 0.40,
+        afternoon_start_hour: int = 12,
         # Stop Loss settings
         enable_stop_loss: bool = False,
         stop_loss_percent: float = 50.0,
@@ -131,6 +133,8 @@ class PositionManager:
         # Delta targeting
         self.use_delta_targeting = use_delta_targeting
         self.target_delta = target_delta
+        self.afternoon_delta = afternoon_delta
+        self.afternoon_start_hour = afternoon_start_hour
         
         # Risk management settings
         self.enable_stop_loss = enable_stop_loss
@@ -304,8 +308,9 @@ class PositionManager:
         
         current_delta = self._get_current_delta_exposure()
         
-        # Estimate delta of new position
-        new_delta = self.target_delta * self.contracts * 100
+        # Estimate delta of new position using current target delta
+        current_target = self._get_current_target_delta()
+        new_delta = current_target * self.contracts * 100
         if signal_direction == Direction.SHORT:
             new_delta = -new_delta
         
@@ -317,6 +322,22 @@ class PositionManager:
         
         logger.info(f"Delta exposure OK: {current_delta:.0f} + {new_delta:.0f} = {projected_delta:.0f} (max: {self.max_delta_exposure:.0f})")
         return True
+    
+    def _get_current_target_delta(self) -> float:
+        """
+        Get target delta based on time of day.
+        
+        Morning (before afternoon_start_hour): target_delta (default 30Δ)
+        Afternoon (after afternoon_start_hour): afternoon_delta (default 40Δ)
+        """
+        now = datetime.now()
+        
+        if now.hour >= self.afternoon_start_hour:
+            logger.info(f"Afternoon session ({now.hour}:00) - using {self.afternoon_delta:.0%} delta")
+            return self.afternoon_delta
+        else:
+            logger.info(f"Morning session ({now.hour}:00) - using {self.target_delta:.0%} delta")
+            return self.target_delta
     
     def trades_remaining(self) -> int:
         """Get number of trades remaining today"""
@@ -426,7 +447,9 @@ class PositionManager:
         
         # Find option (by delta or nearest OTM)
         try:
-            target_delta = self.target_delta if self.use_delta_targeting else None
+            # Determine delta based on time of day
+            current_delta = self._get_current_target_delta()
+            target_delta = current_delta if self.use_delta_targeting else None
             
             option = self.client.get_nearest_otm_option(
                 symbol=self.symbol,

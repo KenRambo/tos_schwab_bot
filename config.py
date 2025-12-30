@@ -25,7 +25,9 @@ class TradingConfig:
     
     # Option selection
     use_delta_targeting: bool = True  # True = select by delta, False = nearest OTM
-    target_delta: float = 0.30  # Target delta (0.30 = 30 delta)
+    target_delta: float = 0.30  # Morning delta (0.30 = 30 delta)
+    afternoon_delta: float = 0.40  # Afternoon delta (higher for 0DTE gamma)
+    afternoon_start_hour: int = 12  # When to switch to afternoon delta (12 = noon ET)
     min_days_to_expiry: int = 0  # 0DTE allowed
     max_days_to_expiry: int = 0  # 0 = 0DTE only, 1 = include tomorrow, etc.
     prefer_weekly: bool = True
@@ -34,15 +36,15 @@ class TradingConfig:
     hold_until_opposite_signal: bool = True  # Match your ToS strategy
     
     # Position Sizing - Fixed Fractional
-    use_fixed_fractional: bool = False  # Size based on account balance
-    risk_percent_per_trade: float = 20.0  # Risk X% of account per trade
+    use_fixed_fractional: bool = True  # Size based on account balance
+    risk_percent_per_trade: float = 2.0  # Risk X% of account per trade
     max_position_size: int = 10  # Never exceed X contracts regardless of account size
     min_position_size: int = 1  # Always trade at least X contracts
     
     # Risk management - Daily Loss Limit
     enable_daily_loss_limit: bool = True
     max_daily_loss_dollars: float = 500.0  # Stop trading if daily loss exceeds $X
-    max_daily_loss_percent: float = 10.0  # OR stop if daily loss exceeds X% of starting balance
+    max_daily_loss_percent: float = 5.0  # OR stop if daily loss exceeds X% of starting balance
     
     # Risk management - Stop Loss
     enable_stop_loss: bool = False  # Set True to enable stop loss
@@ -55,7 +57,7 @@ class TradingConfig:
     take_profit_dollars: float = 500.0  # OR exit if profit exceeds $X (whichever hits first)
     
     # Risk management - Trailing Stop
-    enable_trailing_stop: bool = True  # Set True to enable trailing stop
+    enable_trailing_stop: bool = False  # Set True to enable trailing stop
     trailing_stop_percent: float = 25.0  # Trail by X% from high water mark
     trailing_stop_activation: float = 50.0  # Only activate after X% gain
     
@@ -98,7 +100,7 @@ class SignalConfig:
     # Confirmation
     min_confirmation_bars: int = 2
     sustained_bars_required: int = 3
-    signal_cooldown_bars: int = 0
+    signal_cooldown_bars: int = 8
     
     # Opening range bias
     use_or_bias_filter: bool = True

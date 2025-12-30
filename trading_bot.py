@@ -163,6 +163,8 @@ class TradingBot:
                 # Delta targeting
                 use_delta_targeting=self.config.trading.use_delta_targeting,
                 target_delta=self.config.trading.target_delta,
+                afternoon_delta=self.config.trading.afternoon_delta,
+                afternoon_start_hour=self.config.trading.afternoon_start_hour,
                 # Risk management settings
                 enable_stop_loss=self.config.trading.enable_stop_loss,
                 stop_loss_percent=self.config.trading.stop_loss_percent,
