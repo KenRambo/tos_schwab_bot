@@ -8,6 +8,9 @@ Strategy: Hold until opposite signal
 - LONG signal -> Buy nearest OTM CALL
 - SHORT signal -> Close CALL, Buy nearest OTM PUT
 """
+from dotenv import load_dotenv
+load_dotenv()
+
 import os
 import sys
 import time

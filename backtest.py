@@ -7,6 +7,8 @@ Usage:
     python backtest.py --start 2024-12-01 # From specific date
     python backtest.py --output results.csv  # Export trades to CSV
 """
+from dotenv import load_dotenv
+load_dotenv()
 import os
 import sys
 import logging
