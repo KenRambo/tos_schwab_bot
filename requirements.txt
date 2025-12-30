@@ -1,0 +1,42 @@
+# ToS Signal Trading Bot - Dependencies
+
+# HTTP requests for Schwab API
+requests>=2.31.0
+
+# WebSocket for streaming data (optional)
+websockets>=12.0
+
+# Data handling
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Scheduling and async
+schedule>=1.2.0
+asyncio-throttle>=1.0.2
+
+# Configuration management
+python-dotenv>=1.0.0
+
+# Logging enhancements
+colorlog>=6.7.0
+
+# Dashboard
+fastapi>=0.104.0
+uvicorn>=0.24.0
+
+# Automated authentication (optional)
+selenium>=4.15.0
+webdriver-manager>=4.0.0
+
+# Backup encryption (optional)
+cryptography>=41.0.0
+
+# Testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+
+# Optional: Discord notifications
+# discord.py>=2.3.0
+
+# Optional: Telegram notifications  
+# python-telegram-bot>=20.0

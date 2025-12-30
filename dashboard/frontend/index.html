@@ -1,0 +1,979 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ToS Trading Bot Dashboard</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #0a0a0f;
+            color: #e0e0e0;
+            min-height: 100vh;
+        }
+        
+        .dashboard {
+            display: grid;
+            grid-template-columns: 1fr 320px;
+            grid-template-rows: auto 1fr auto;
+            gap: 12px;
+            padding: 12px;
+            height: 100vh;
+        }
+        
+        .header {
+            grid-column: 1 / -1;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 20px;
+            background: #12121a;
+            border-radius: 8px;
+            border: 1px solid #2a2a3a;
+        }
+        
+        .header h1 {
+            font-size: 1.4rem;
+            font-weight: 600;
+            color: #fff;
+        }
+        
+        .header-status {
+            display: flex;
+            gap: 20px;
+            align-items: center;
+        }
+        
+        .status-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.9rem;
+        }
+        
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+        }
+        
+        .status-dot.green { background: #22c55e; box-shadow: 0 0 8px #22c55e; }
+        .status-dot.red { background: #ef4444; box-shadow: 0 0 8px #ef4444; }
+        .status-dot.yellow { background: #eab308; box-shadow: 0 0 8px #eab308; }
+        
+        .chart-container {
+            background: #12121a;
+            border-radius: 8px;
+            border: 1px solid #2a2a3a;
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .chart-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+        
+        .price-display {
+            font-size: 2rem;
+            font-weight: 700;
+            color: #fff;
+        }
+        
+        .price-change {
+            font-size: 1rem;
+            margin-left: 12px;
+        }
+        
+        .price-change.up { color: #22c55e; }
+        .price-change.down { color: #ef4444; }
+        
+        .levels-display {
+            display: flex;
+            gap: 20px;
+            font-size: 0.85rem;
+        }
+        
+        .level {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .level-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 2px;
+        }
+        
+        .level-dot.vah { background: #06b6d4; }
+        .level-dot.poc { background: #a855f7; }
+        .level-dot.val { background: #06b6d4; }
+        .level-dot.or { background: #22c55e; }
+        
+        #chart {
+            flex: 1;
+            min-height: 400px;
+        }
+        
+        .sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        
+        .panel {
+            background: #12121a;
+            border-radius: 8px;
+            border: 1px solid #2a2a3a;
+            padding: 16px;
+        }
+        
+        .panel-title {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: #888;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 12px;
+        }
+        
+        .position-card {
+            padding: 16px;
+            border-radius: 6px;
+            text-align: center;
+        }
+        
+        .position-card.flat {
+            background: #1a1a2a;
+            border: 1px solid #2a2a3a;
+        }
+        
+        .position-card.long {
+            background: linear-gradient(135deg, #064e3b, #065f46);
+            border: 1px solid #22c55e;
+        }
+        
+        .position-card.short {
+            background: linear-gradient(135deg, #7f1d1d, #991b1b);
+            border: 1px solid #ef4444;
+        }
+        
+        .position-direction {
+            font-size: 1.5rem;
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+        
+        .position-details {
+            font-size: 0.85rem;
+            color: #aaa;
+        }
+        
+        .position-pnl {
+            font-size: 1.2rem;
+            font-weight: 600;
+            margin-top: 8px;
+        }
+        
+        .config-group {
+            margin-bottom: 16px;
+        }
+        
+        .config-group:last-child {
+            margin-bottom: 0;
+        }
+        
+        .config-group-title {
+            font-size: 0.75rem;
+            color: #666;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+        }
+        
+        .config-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+            border-bottom: 1px solid #1a1a2a;
+        }
+        
+        .config-row:last-child {
+            border-bottom: none;
+        }
+        
+        .config-label {
+            font-size: 0.85rem;
+            color: #ccc;
+        }
+        
+        .config-value {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        input[type="number"] {
+            width: 70px;
+            padding: 6px 8px;
+            border: 1px solid #2a2a3a;
+            border-radius: 4px;
+            background: #0a0a0f;
+            color: #fff;
+            font-size: 0.85rem;
+            text-align: right;
+        }
+        
+        input[type="number"]:focus {
+            outline: none;
+            border-color: #3b82f6;
+        }
+        
+        .toggle {
+            position: relative;
+            width: 44px;
+            height: 24px;
+            background: #2a2a3a;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        
+        .toggle.active {
+            background: #22c55e;
+        }
+        
+        .toggle::after {
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 20px;
+            height: 20px;
+            background: #fff;
+            border-radius: 50%;
+            transition: transform 0.2s;
+        }
+        
+        .toggle.active::after {
+            transform: translateX(20px);
+        }
+        
+        .btn {
+            padding: 10px 16px;
+            border: none;
+            border-radius: 6px;
+            font-size: 0.9rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            width: 100%;
+        }
+        
+        .btn-primary {
+            background: #3b82f6;
+            color: #fff;
+        }
+        
+        .btn-primary:hover {
+            background: #2563eb;
+        }
+        
+        .btn-success {
+            background: #22c55e;
+            color: #fff;
+        }
+        
+        .btn-success:hover {
+            background: #16a34a;
+        }
+        
+        .btn-danger {
+            background: #ef4444;
+            color: #fff;
+        }
+        
+        .btn-danger:hover {
+            background: #dc2626;
+        }
+        
+        .btn-outline {
+            background: transparent;
+            border: 1px solid #2a2a3a;
+            color: #ccc;
+        }
+        
+        .btn-outline:hover {
+            background: #1a1a2a;
+        }
+        
+        .btn-group {
+            display: flex;
+            gap: 8px;
+            margin-top: 12px;
+        }
+        
+        .btn-group .btn {
+            flex: 1;
+        }
+        
+        .signals-list {
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        
+        .signal-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px;
+            margin-bottom: 4px;
+            border-radius: 4px;
+            font-size: 0.8rem;
+        }
+        
+        .signal-item.long {
+            background: rgba(34, 197, 94, 0.1);
+            border-left: 3px solid #22c55e;
+        }
+        
+        .signal-item.short {
+            background: rgba(239, 68, 68, 0.1);
+            border-left: 3px solid #ef4444;
+        }
+        
+        .signal-time {
+            color: #666;
+        }
+        
+        .footer {
+            grid-column: 1 / -1;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 20px;
+            background: #12121a;
+            border-radius: 8px;
+            border: 1px solid #2a2a3a;
+            font-size: 0.85rem;
+            color: #666;
+        }
+        
+        .trades-today {
+            display: flex;
+            gap: 20px;
+        }
+        
+        .trade-stat {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .trade-stat-value {
+            font-weight: 600;
+            color: #fff;
+        }
+        
+        .or-bias {
+            padding: 4px 12px;
+            border-radius: 4px;
+            font-weight: 600;
+            font-size: 0.8rem;
+        }
+        
+        .or-bias.bull {
+            background: rgba(34, 197, 94, 0.2);
+            color: #22c55e;
+        }
+        
+        .or-bias.bear {
+            background: rgba(239, 68, 68, 0.2);
+            color: #ef4444;
+        }
+        
+        .or-bias.neutral {
+            background: rgba(156, 163, 175, 0.2);
+            color: #9ca3af;
+        }
+        
+        @media (max-width: 1024px) {
+            .dashboard {
+                grid-template-columns: 1fr;
+            }
+            
+            .sidebar {
+                flex-direction: row;
+                flex-wrap: wrap;
+            }
+            
+            .sidebar .panel {
+                flex: 1;
+                min-width: 280px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useCallback } = React;
+        
+        const API_URL = 'http://localhost:8000';
+        const WS_URL = 'ws://localhost:8000/ws';
+        
+        // Toggle Component
+        function Toggle({ value, onChange }) {
+            return (
+                <div 
+                    className={`toggle ${value ? 'active' : ''}`}
+                    onClick={() => onChange(!value)}
+                />
+            );
+        }
+        
+        // Price Chart Component
+        function PriceChart({ bars, levels, signals }) {
+            const chartContainerRef = useRef(null);
+            const chartRef = useRef(null);
+            const candleSeriesRef = useRef(null);
+            const vahLineRef = useRef(null);
+            const pocLineRef = useRef(null);
+            const valLineRef = useRef(null);
+            
+            useEffect(() => {
+                if (!chartContainerRef.current) return;
+                
+                const chart = LightweightCharts.createChart(chartContainerRef.current, {
+                    layout: {
+                        background: { type: 'solid', color: '#12121a' },
+                        textColor: '#888',
+                    },
+                    grid: {
+                        vertLines: { color: '#1a1a2a' },
+                        horzLines: { color: '#1a1a2a' },
+                    },
+                    crosshair: {
+                        mode: LightweightCharts.CrosshairMode.Normal,
+                    },
+                    rightPriceScale: {
+                        borderColor: '#2a2a3a',
+                    },
+                    timeScale: {
+                        borderColor: '#2a2a3a',
+                        timeVisible: true,
+                    },
+                });
+                
+                chartRef.current = chart;
+                
+                // Candlestick series
+                const candleSeries = chart.addCandlestickSeries({
+                    upColor: '#22c55e',
+                    downColor: '#ef4444',
+                    borderUpColor: '#22c55e',
+                    borderDownColor: '#ef4444',
+                    wickUpColor: '#22c55e',
+                    wickDownColor: '#ef4444',
+                });
+                candleSeriesRef.current = candleSeries;
+                
+                // Level lines
+                vahLineRef.current = candleSeries.createPriceLine({
+                    price: 0,
+                    color: '#06b6d4',
+                    lineWidth: 2,
+                    lineStyle: LightweightCharts.LineStyle.Solid,
+                    axisLabelVisible: true,
+                    title: 'VAH',
+                });
+                
+                pocLineRef.current = candleSeries.createPriceLine({
+                    price: 0,
+                    color: '#a855f7',
+                    lineWidth: 2,
+                    lineStyle: LightweightCharts.LineStyle.Dashed,
+                    axisLabelVisible: true,
+                    title: 'POC',
+                });
+                
+                valLineRef.current = candleSeries.createPriceLine({
+                    price: 0,
+                    color: '#06b6d4',
+                    lineWidth: 2,
+                    lineStyle: LightweightCharts.LineStyle.Solid,
+                    axisLabelVisible: true,
+                    title: 'VAL',
+                });
+                
+                // Handle resize
+                const handleResize = () => {
+                    chart.applyOptions({
+                        width: chartContainerRef.current.clientWidth,
+                        height: chartContainerRef.current.clientHeight,
+                    });
+                };
+                
+                window.addEventListener('resize', handleResize);
+                handleResize();
+                
+                return () => {
+                    window.removeEventListener('resize', handleResize);
+                    chart.remove();
+                };
+            }, []);
+            
+            // Update data
+            useEffect(() => {
+                if (candleSeriesRef.current && bars.length > 0) {
+                    const chartData = bars.map(bar => ({
+                        time: new Date(bar.timestamp).getTime() / 1000,
+                        open: bar.open,
+                        high: bar.high,
+                        low: bar.low,
+                        close: bar.close,
+                    }));
+                    candleSeriesRef.current.setData(chartData);
+                }
+            }, [bars]);
+            
+            // Update levels
+            useEffect(() => {
+                if (vahLineRef.current && levels.vah > 0) {
+                    vahLineRef.current.applyOptions({ price: levels.vah });
+                }
+                if (pocLineRef.current && levels.poc > 0) {
+                    pocLineRef.current.applyOptions({ price: levels.poc });
+                }
+                if (valLineRef.current && levels.val > 0) {
+                    valLineRef.current.applyOptions({ price: levels.val });
+                }
+            }, [levels]);
+            
+            return <div id="chart" ref={chartContainerRef} />;
+        }
+        
+        // Main Dashboard Component
+        function Dashboard() {
+            const [status, setStatus] = useState({
+                connected: false,
+                running: false,
+                paper_trading: true,
+                current_price: 0,
+            });
+            const [config, setConfig] = useState({});
+            const [position, setPosition] = useState({ status: 'FLAT' });
+            const [levels, setLevels] = useState({ vah: 0, poc: 0, val: 0, or_bias: 'NEUTRAL' });
+            const [bars, setBars] = useState([]);
+            const [signals, setSignals] = useState([]);
+            const [dailyStats, setDailyStats] = useState({});
+            const wsRef = useRef(null);
+            
+            // Fetch initial data
+            useEffect(() => {
+                const fetchData = async () => {
+                    try {
+                        const [statusRes, configRes, positionRes, levelsRes, signalsRes] = await Promise.all([
+                            fetch(`${API_URL}/api/status`).then(r => r.json()),
+                            fetch(`${API_URL}/api/config`).then(r => r.json()),
+                            fetch(`${API_URL}/api/position`).then(r => r.json()),
+                            fetch(`${API_URL}/api/levels`).then(r => r.json()),
+                            fetch(`${API_URL}/api/signals`).then(r => r.json()),
+                        ]);
+                        
+                        setStatus(statusRes);
+                        setConfig(configRes);
+                        setPosition(positionRes);
+                        setLevels(levelsRes);
+                        setSignals(signalsRes);
+                        setDailyStats(statusRes.daily_stats || {});
+                    } catch (error) {
+                        console.error('Error fetching data:', error);
+                    }
+                };
+                
+                fetchData();
+                const interval = setInterval(fetchData, 5000);
+                return () => clearInterval(interval);
+            }, []);
+            
+            // WebSocket connection
+            useEffect(() => {
+                const connectWs = () => {
+                    const ws = new WebSocket(WS_URL);
+                    
+                    ws.onopen = () => {
+                        console.log('WebSocket connected');
+                    };
+                    
+                    ws.onmessage = (event) => {
+                        const data = JSON.parse(event.data);
+                        
+                        switch (data.type) {
+                            case 'price_update':
+                                setStatus(prev => ({ ...prev, current_price: data.price }));
+                                break;
+                            case 'levels_update':
+                                setLevels(data);
+                                break;
+                            case 'signal':
+                                setSignals(prev => [...prev, data].slice(-50));
+                                break;
+                            case 'position_update':
+                                setPosition(data.position);
+                                break;
+                            case 'config_updated':
+                                setConfig(data.config);
+                                break;
+                        }
+                    };
+                    
+                    ws.onclose = () => {
+                        console.log('WebSocket disconnected, reconnecting...');
+                        setTimeout(connectWs, 3000);
+                    };
+                    
+                    wsRef.current = ws;
+                };
+                
+                connectWs();
+                
+                return () => {
+                    if (wsRef.current) {
+                        wsRef.current.close();
+                    }
+                };
+            }, []);
+            
+            // Update config
+            const updateConfig = async (updates) => {
+                try {
+                    const res = await fetch(`${API_URL}/api/config`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(updates),
+                    });
+                    const data = await res.json();
+                    setConfig(data.config);
+                } catch (error) {
+                    console.error('Error updating config:', error);
+                }
+            };
+            
+            // Manual signal
+            const triggerSignal = async (direction) => {
+                try {
+                    await fetch(`${API_URL}/api/signal/manual`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ direction }),
+                    });
+                } catch (error) {
+                    console.error('Error triggering signal:', error);
+                }
+            };
+            
+            // Close position
+            const closePosition = async () => {
+                try {
+                    await fetch(`${API_URL}/api/position/close`, { method: 'POST' });
+                    setPosition({ status: 'FLAT' });
+                } catch (error) {
+                    console.error('Error closing position:', error);
+                }
+            };
+            
+            // Toggle bot
+            const toggleBot = async () => {
+                const endpoint = status.running ? 'stop' : 'start';
+                try {
+                    const res = await fetch(`${API_URL}/api/bot/${endpoint}`, { method: 'POST' });
+                    const data = await res.json();
+                    setStatus(prev => ({ ...prev, running: data.running }));
+                } catch (error) {
+                    console.error('Error toggling bot:', error);
+                }
+            };
+            
+            const positionClass = position.status === 'LONG' ? 'long' : 
+                                 position.status === 'SHORT' ? 'short' : 'flat';
+            
+            return (
+                <div className="dashboard">
+                    {/* Header */}
+                    <header className="header">
+                        <h1>🎯 ToS Signal Bot</h1>
+                        <div className="header-status">
+                            <div className="status-item">
+                                <span className={`status-dot ${status.connected ? 'green' : 'red'}`} />
+                                <span>{status.connected ? 'Connected' : 'Disconnected'}</span>
+                            </div>
+                            <div className="status-item">
+                                <span className={`status-dot ${status.running ? 'green' : 'yellow'}`} />
+                                <span>{status.running ? 'Running' : 'Stopped'}</span>
+                            </div>
+                            <div className="status-item">
+                                <span className={`status-dot ${status.paper_trading ? 'yellow' : 'green'}`} />
+                                <span>{status.paper_trading ? 'Paper' : 'Live'}</span>
+                            </div>
+                            <span className={`or-bias ${levels.or_bias?.toLowerCase()}`}>
+                                OR: {levels.or_bias || 'NEUTRAL'}
+                            </span>
+                        </div>
+                    </header>
+                    
+                    {/* Chart */}
+                    <div className="chart-container">
+                        <div className="chart-header">
+                            <div>
+                                <span className="price-display">
+                                    ${status.current_price?.toFixed(2) || '---'}
+                                </span>
+                                <span className="levels-display">
+                                    <span className="level">
+                                        <span className="level-dot vah" />
+                                        VAH: {levels.vah?.toFixed(2)}
+                                    </span>
+                                    <span className="level">
+                                        <span className="level-dot poc" />
+                                        POC: {levels.poc?.toFixed(2)}
+                                    </span>
+                                    <span className="level">
+                                        <span className="level-dot val" />
+                                        VAL: {levels.val?.toFixed(2)}
+                                    </span>
+                                    {levels.or_high > 0 && (
+                                        <span className="level">
+                                            <span className="level-dot or" />
+                                            OR: {levels.or_low?.toFixed(2)} - {levels.or_high?.toFixed(2)}
+                                        </span>
+                                    )}
+                                </span>
+                            </div>
+                        </div>
+                        <PriceChart bars={bars} levels={levels} signals={signals} />
+                    </div>
+                    
+                    {/* Sidebar */}
+                    <div className="sidebar">
+                        {/* Position Panel */}
+                        <div className="panel">
+                            <div className="panel-title">Current Position</div>
+                            <div className={`position-card ${positionClass}`}>
+                                <div className="position-direction">
+                                    {position.status === 'FLAT' ? '—' : position.status}
+                                </div>
+                                {position.status !== 'FLAT' && (
+                                    <>
+                                        <div className="position-details">
+                                            {position.symbol}<br />
+                                            Entry: ${position.entry_price?.toFixed(2)}
+                                        </div>
+                                        <div className="position-pnl">
+                                            {position.unrealized_pnl >= 0 ? '+' : ''}
+                                            ${position.unrealized_pnl?.toFixed(2)}
+                                        </div>
+                                    </>
+                                )}
+                            </div>
+                            <div className="btn-group">
+                                <button className="btn btn-success" onClick={() => triggerSignal('long')}>
+                                    Long
+                                </button>
+                                <button className="btn btn-danger" onClick={() => triggerSignal('short')}>
+                                    Short
+                                </button>
+                            </div>
+                            {position.status !== 'FLAT' && (
+                                <button className="btn btn-outline" style={{marginTop: '8px'}} onClick={closePosition}>
+                                    Close Position
+                                </button>
+                            )}
+                        </div>
+                        
+                        {/* Config Panel */}
+                        <div className="panel">
+                            <div className="panel-title">Configuration</div>
+                            
+                            <div className="config-group">
+                                <div className="config-group-title">Trading</div>
+                                <div className="config-row">
+                                    <span className="config-label">Paper Trading</span>
+                                    <Toggle 
+                                        value={config.paper_trading} 
+                                        onChange={(v) => updateConfig({ paper_trading: v })}
+                                    />
+                                </div>
+                                <div className="config-row">
+                                    <span className="config-label">Contracts</span>
+                                    <input 
+                                        type="number" 
+                                        value={config.trading?.contracts || 1}
+                                        onChange={(e) => updateConfig({ contracts: parseInt(e.target.value) })}
+                                        min="1"
+                                        max="10"
+                                    />
+                                </div>
+                                <div className="config-row">
+                                    <span className="config-label">Max Daily Trades</span>
+                                    <input 
+                                        type="number" 
+                                        value={config.trading?.max_daily_trades || 3}
+                                        onChange={(e) => updateConfig({ max_daily_trades: parseInt(e.target.value) })}
+                                        min="1"
+                                        max="20"
+                                    />
+                                </div>
+                                <div className="config-row">
+                                    <span className="config-label">0DTE Only</span>
+                                    <Toggle 
+                                        value={config.trading?.max_days_to_expiry === 0} 
+                                        onChange={(v) => updateConfig({ max_days_to_expiry: v ? 0 : 7 })}
+                                    />
+                                </div>
+                            </div>
+                            
+                            <div className="config-group">
+                                <div className="config-group-title">Risk Management</div>
+                                <div className="config-row">
+                                    <span className="config-label">Stop Loss</span>
+                                    <Toggle 
+                                        value={config.trading?.enable_stop_loss} 
+                                        onChange={(v) => updateConfig({ enable_stop_loss: v })}
+                                    />
+                                </div>
+                                {config.trading?.enable_stop_loss && (
+                                    <div className="config-row">
+                                        <span className="config-label">Stop %</span>
+                                        <input 
+                                            type="number" 
+                                            value={config.trading?.stop_loss_percent || 50}
+                                            onChange={(e) => updateConfig({ stop_loss_percent: parseFloat(e.target.value) })}
+                                        />
+                                    </div>
+                                )}
+                                <div className="config-row">
+                                    <span className="config-label">Take Profit</span>
+                                    <Toggle 
+                                        value={config.trading?.enable_take_profit} 
+                                        onChange={(v) => updateConfig({ enable_take_profit: v })}
+                                    />
+                                </div>
+                                {config.trading?.enable_take_profit && (
+                                    <div className="config-row">
+                                        <span className="config-label">Target %</span>
+                                        <input 
+                                            type="number" 
+                                            value={config.trading?.take_profit_percent || 100}
+                                            onChange={(e) => updateConfig({ take_profit_percent: parseFloat(e.target.value) })}
+                                        />
+                                    </div>
+                                )}
+                                <div className="config-row">
+                                    <span className="config-label">Trailing Stop</span>
+                                    <Toggle 
+                                        value={config.trading?.enable_trailing_stop} 
+                                        onChange={(v) => updateConfig({ enable_trailing_stop: v })}
+                                    />
+                                </div>
+                            </div>
+                            
+                            <div className="config-group">
+                                <div className="config-group-title">Filters</div>
+                                <div className="config-row">
+                                    <span className="config-label">OR Bias Filter</span>
+                                    <Toggle 
+                                        value={config.signal?.use_or_bias_filter} 
+                                        onChange={(v) => updateConfig({ use_or_bias_filter: v })}
+                                    />
+                                </div>
+                                <div className="config-row">
+                                    <span className="config-label">RTH Only</span>
+                                    <Toggle 
+                                        value={config.time?.rth_only} 
+                                        onChange={(v) => updateConfig({ rth_only: v })}
+                                    />
+                                </div>
+                            </div>
+                        </div>
+                        
+                        {/* Signals Panel */}
+                        <div className="panel">
+                            <div className="panel-title">Recent Signals</div>
+                            <div className="signals-list">
+                                {signals.length === 0 ? (
+                                    <div style={{color: '#666', fontSize: '0.85rem'}}>No signals yet</div>
+                                ) : (
+                                    signals.slice().reverse().map((signal, i) => (
+                                        <div key={i} className={`signal-item ${signal.direction?.toLowerCase()}`}>
+                                            <span>{signal.signal_type}</span>
+                                            <span className="signal-time">
+                                                {new Date(signal.timestamp).toLocaleTimeString()}
+                                            </span>
+                                        </div>
+                                    ))
+                                )}
+                            </div>
+                        </div>
+                        
+                        {/* Bot Control */}
+                        <div className="panel">
+                            <div className="panel-title">Bot Control</div>
+                            <button 
+                                className={`btn ${status.running ? 'btn-danger' : 'btn-success'}`}
+                                onClick={toggleBot}
+                            >
+                                {status.running ? '⏹ Stop Bot' : '▶ Start Bot'}
+                            </button>
+                        </div>
+                    </div>
+                    
+                    {/* Footer */}
+                    <footer className="footer">
+                        <div className="trades-today">
+                            <div className="trade-stat">
+                                <span>Trades Today:</span>
+                                <span className="trade-stat-value">
+                                    {dailyStats.trades_taken || 0} / {config.trading?.max_daily_trades || 3}
+                                </span>
+                            </div>
+                            <div className="trade-stat">
+                                <span>Win Rate:</span>
+                                <span className="trade-stat-value">{dailyStats.win_rate?.toFixed(0) || 0}%</span>
+                            </div>
+                            <div className="trade-stat">
+                                <span>P&L:</span>
+                                <span className="trade-stat-value" style={{color: (dailyStats.total_pnl || 0) >= 0 ? '#22c55e' : '#ef4444'}}>
+                                    ${dailyStats.total_pnl?.toFixed(2) || '0.00'}
+                                </span>
+                            </div>
+                        </div>
+                        <div>
+                            Last Update: {status.last_update ? new Date(status.last_update).toLocaleTimeString() : '—'}
+                        </div>
+                    </footer>
+                </div>
+            );
+        }
+        
+        // Render
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<Dashboard />);
+    </script>
+</body>
+</html>
