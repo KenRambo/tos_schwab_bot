@@ -224,6 +224,7 @@ The bot starts in **paper trading mode** by default. To switch to live:
 ```
 tos_schwab_bot/
 ├── trading_bot.py       # Main bot application
+├── backtest.py          # Backtesting module
 ├── config.py            # Configuration settings
 ├── schwab_auth.py       # OAuth2 authentication
 ├── schwab_client.py     # Schwab API client
@@ -283,6 +284,103 @@ tos_schwab_bot/
 3. Friday close: Send weekly report
 4. On position close: Record P&L, notify
 ```
+
+## Backtesting
+
+The backtesting module replays historical data through the signal detector to validate strategy performance.
+
+### Usage
+
+```bash
+# Default: Last 30 trading days
+python backtest.py
+
+# Last 60 trading days
+python backtest.py --days 60
+
+# From specific start date
+python backtest.py --start 2024-12-01
+
+# Export trades to CSV
+python backtest.py --output trades.csv
+
+# Verbose mode (shows each trade)
+python backtest.py --verbose
+
+# Custom settings
+python backtest.py --days 30 --capital 25000 --contracts 2 --output results.csv
+```
+
+### Sample Output
+
+```
+======================================================================
+                        BACKTEST RESULTS
+======================================================================
+  Period: 2024-11-15 to 2024-12-30
+  Trading Days: 30
+  Total Bars: 2,340
+
+----------------------------------------------------------------------
+  TRADE STATISTICS
+----------------------------------------------------------------------
+  Total Trades:      47
+  Winning Trades:    28
+  Losing Trades:     19
+  Win Rate:          59.6%
+
+  Avg Win:           $156.32
+  Avg Loss:          $-89.45
+  Avg Trade:         $56.78
+  Avg Bars Held:     8.3
+
+----------------------------------------------------------------------
+  PERFORMANCE
+----------------------------------------------------------------------
+  Total P&L:         $2,668.66
+  Profit Factor:     2.58
+  Expectancy:        $56.78 per trade
+
+  Best Day:          $425.00
+  Worst Day:         $-312.50
+  Sharpe Ratio:      1.45
+
+----------------------------------------------------------------------
+  RISK METRICS
+----------------------------------------------------------------------
+  Starting Capital:  $10,000.00
+  Ending Capital:    $12,668.66
+  Return:            26.7%
+  Max Drawdown:      $845.00 (7.2%)
+
+----------------------------------------------------------------------
+  SIGNALS BY TYPE
+----------------------------------------------------------------------
+  VAL_BOUNCE                  12 trades    $    892.50
+  POC_RECLAIM                  9 trades    $    645.00
+  VAH_REJECTION                8 trades    $    412.30
+  BREAKOUT                     7 trades    $    318.86
+  ...
+======================================================================
+```
+
+### What It Measures
+
+- **Win Rate** - Percentage of profitable trades
+- **Profit Factor** - Gross wins / gross losses (>1 is profitable)
+- **Expectancy** - Average P&L per trade
+- **Sharpe Ratio** - Risk-adjusted return (annualized)
+- **Max Drawdown** - Largest peak-to-trough decline
+- **Signal Breakdown** - P&L by signal type to identify best performers
+
+### Option P&L Estimation
+
+The backtester estimates option P&L using:
+```
+Option P&L ≈ Underlying Move × Delta × 100 × Contracts
+```
+
+This is a simplification - real 0DTE options are affected by IV crush, theta decay, and gamma. Use results as directional guidance, not exact predictions.
 
 ## Matching Your ToS Indicator
 

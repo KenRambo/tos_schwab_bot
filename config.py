@@ -21,7 +21,7 @@ class TradingConfig:
     """Trading parameters"""
     symbol: str = "SPY"
     contracts: int = 1
-    max_daily_trades: int = 3
+    max_daily_trades: int = 10
     
     # Option selection
     use_delta_targeting: bool = True  # True = select by delta, False = nearest OTM
@@ -37,14 +37,14 @@ class TradingConfig:
     
     # Position Sizing - Fixed Fractional
     use_fixed_fractional: bool = True  # Size based on account balance
-    risk_percent_per_trade: float = 2.0  # Risk X% of account per trade
+    risk_percent_per_trade: float = 30.0  # Risk X% of account per trade
     max_position_size: int = 10  # Never exceed X contracts regardless of account size
     min_position_size: int = 1  # Always trade at least X contracts
     
     # Risk management - Daily Loss Limit
     enable_daily_loss_limit: bool = True
     max_daily_loss_dollars: float = 500.0  # Stop trading if daily loss exceeds $X
-    max_daily_loss_percent: float = 5.0  # OR stop if daily loss exceeds X% of starting balance
+    max_daily_loss_percent: float = 10.0  # OR stop if daily loss exceeds X% of starting balance
     
     # Risk management - Stop Loss
     enable_stop_loss: bool = False  # Set True to enable stop loss
@@ -57,7 +57,7 @@ class TradingConfig:
     take_profit_dollars: float = 500.0  # OR exit if profit exceeds $X (whichever hits first)
     
     # Risk management - Trailing Stop
-    enable_trailing_stop: bool = False  # Set True to enable trailing stop
+    enable_trailing_stop: bool = True  # Set True to enable trailing stop
     trailing_stop_percent: float = 25.0  # Trail by X% from high water mark
     trailing_stop_activation: float = 50.0  # Only activate after X% gain
     
@@ -77,12 +77,12 @@ class TimeConfig:
     or_end: time = field(default_factory=lambda: time(10, 0))
     
     # Avoid trading during these periods (matching your ToS script)
-    avoid_first_minutes: int = 25  # First 25 min after open
+    avoid_first_minutes: int = 10  # First 10 min after open
     avoid_lunch_start: time = field(default_factory=lambda: time(12, 0))
     avoid_lunch_end: time = field(default_factory=lambda: time(13, 30))
     avoid_last_minutes: int = 15  # Last 15 min before close
     
-    use_time_filter: bool = False  # Match your ToS setting
+    use_time_filter: bool = True  # Match your ToS setting
     rth_only: bool = True  # Only trade during RTH
 
 
@@ -100,7 +100,7 @@ class SignalConfig:
     # Confirmation
     min_confirmation_bars: int = 2
     sustained_bars_required: int = 3
-    signal_cooldown_bars: int = 8
+    signal_cooldown_bars: int = 0
     
     # Opening range bias
     use_or_bias_filter: bool = True
@@ -159,7 +159,7 @@ class BotConfig:
     
     # Intra-bar signal checking (to match ToS behavior)
     enable_intra_bar_signals: bool = True  # Check signals during bar formation
-    intra_bar_check_interval: int = 15  # Seconds between intra-bar checks
+    intra_bar_check_interval: int = 60  # Seconds between intra-bar checks
     
     # Paper trading mode
     paper_trading: bool = True  # Set to False for live trading
