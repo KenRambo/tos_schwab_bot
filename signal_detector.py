@@ -234,6 +234,74 @@ class SignalDetector:
         
         return signal
     
+    def check_live_bar(self, live_bar: Bar) -> Optional[Signal]:
+        """
+        Check for signals on a live (in-progress) bar WITHOUT committing it to history.
+        
+        This allows the bot to fire signals mid-bar like ToS does, rather than
+        waiting for bar close.
+        
+        Args:
+            live_bar: The current in-progress bar (OHLCV from bar open to now)
+        
+        Returns Signal if conditions are met, None otherwise.
+        """
+        # Need enough history
+        if len(self.bars) < self.length_period:
+            return None
+        
+        # Temporarily add the live bar to calculate value area
+        # We'll remove it after checking
+        temp_bars = self.bars.copy()
+        temp_bars.append(live_bar)
+        
+        # Calculate value area with live bar included
+        # We need to temporarily update session state
+        temp_session_high = max(self.session_high, live_bar.high)
+        temp_session_low = min(self.session_low, live_bar.low)
+        temp_session_volume = self.session_volume + live_bar.volume
+        
+        typical_price = (live_bar.high + live_bar.low + live_bar.close) / 3
+        temp_vwap_sum = self.session_vwap_sum + live_bar.volume * typical_price
+        temp_vol_weighted = self.session_vol_weighted + live_bar.volume * ((live_bar.high + live_bar.low) / 2)
+        
+        # Calculate VA using temp values
+        if temp_session_volume == 0:
+            return None
+        
+        vwap = temp_vwap_sum / temp_session_volume
+        poc = temp_vol_weighted / temp_session_volume
+        
+        # Simplified VA calculation for live check
+        # Use recent bars for high/low range
+        recent = temp_bars[-self.length_period:]
+        period_high = max(b.high for b in recent)
+        period_low = min(b.low for b in recent)
+        
+        range_size = period_high - period_low
+        if range_size <= 0:
+            return None
+        
+        va_offset = range_size * (self.value_area_percent / 100) / 2
+        vah = poc + va_offset
+        val = poc - va_offset
+        
+        va = ValueArea(vah=vah, val=val, poc=poc, vwap=vwap)
+        
+        # Check time filters
+        if not self._check_time_filters(live_bar):
+            return None
+        
+        # Check for signals using live bar
+        signal = self._check_signals(live_bar, va)
+        
+        # Note: We don't update any state here - that happens when the completed bar comes in
+        
+        if signal:
+            logger.info(f"[LIVE BAR] Signal detected mid-bar: {signal.signal_type.value}")
+        
+        return signal
+    
     def _update_session(self, bar: Bar) -> None:
         """Update session-level tracking"""
         if bar.high > self.session_high:

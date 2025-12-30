@@ -157,6 +157,10 @@ class BotConfig:
     data_poll_interval: int = 5  # Seconds between price checks
     use_streaming: bool = True  # Use WebSocket streaming if available
     
+    # Intra-bar signal checking (to match ToS behavior)
+    enable_intra_bar_signals: bool = True  # Check signals during bar formation
+    intra_bar_check_interval: int = 15  # Seconds between intra-bar checks
+    
     # Paper trading mode
     paper_trading: bool = True  # Set to False for live trading
     

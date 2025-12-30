@@ -93,6 +93,16 @@ class TradingBot:
         self.last_price: float = 0
         self.bar_interval_seconds = 300  # 5-minute bars
         
+        # Intra-bar tracking
+        self._current_bar_period: Optional[int] = None  # Which 5-min period we're in
+        self._live_bar_open: Optional[float] = None
+        self._live_bar_high: Optional[float] = None
+        self._live_bar_low: Optional[float] = None
+        self._live_bar_volume: int = 0
+        self._live_bar_start: Optional[datetime] = None
+        self._signal_fired_this_bar: bool = False  # Prevent duplicate signals
+        self._last_intra_bar_check: Optional[datetime] = None
+        
         # Metrics
         self.bars_processed = 0
         self.signals_generated = 0
@@ -570,9 +580,119 @@ class TradingBot:
         
         return False
     
+    def _get_current_bar_period(self) -> int:
+        """Get the current 5-minute bar period (0-11 within each hour)"""
+        now = get_et_now()
+        return now.hour * 12 + now.minute // 5
+    
+    def _reset_live_bar(self) -> None:
+        """Reset live bar tracking for a new period"""
+        self._live_bar_open = None
+        self._live_bar_high = None
+        self._live_bar_low = None
+        self._live_bar_volume = 0
+        self._live_bar_start = None
+        self._signal_fired_this_bar = False
+    
+    def _update_live_bar(self, quote: Any) -> Optional[Bar]:
+        """
+        Update the live bar with current quote data.
+        Returns a Bar object representing the current in-progress bar.
+        """
+        try:
+            price = quote.last_price
+            now = get_et_now()
+            
+            if self._live_bar_open is None:
+                # First tick of this bar
+                self._live_bar_open = price
+                self._live_bar_high = price
+                self._live_bar_low = price
+                self._live_bar_start = now
+            else:
+                # Update high/low
+                if price > self._live_bar_high:
+                    self._live_bar_high = price
+                if price < self._live_bar_low:
+                    self._live_bar_low = price
+            
+            # Build live bar
+            live_bar = Bar(
+                timestamp=self._live_bar_start or now,
+                open=self._live_bar_open,
+                high=self._live_bar_high,
+                low=self._live_bar_low,
+                close=price,  # Current price is the "close" of the live bar
+                volume=self._live_bar_volume  # Volume is approximate
+            )
+            
+            return live_bar
+            
+        except Exception as e:
+            logger.debug(f"Error updating live bar: {e}")
+            return None
+    
+    def _check_intra_bar_signal(self) -> None:
+        """Check for signals on the live (in-progress) bar"""
+        if not self.config.enable_intra_bar_signals:
+            return
+        
+        # Don't check if we already fired a signal this bar
+        if self._signal_fired_this_bar:
+            return
+        
+        # Check if enough time has passed since last intra-bar check
+        now = datetime.now()
+        if self._last_intra_bar_check:
+            elapsed = (now - self._last_intra_bar_check).total_seconds()
+            if elapsed < self.config.intra_bar_check_interval:
+                return
+        
+        self._last_intra_bar_check = now
+        
+        try:
+            # Get current quote
+            quote = self.client.get_quote(self.config.trading.symbol)
+            
+            # Update live bar
+            live_bar = self._update_live_bar(quote)
+            if not live_bar:
+                return
+            
+            # Check for signal on live bar
+            signal = self.detector.check_live_bar(live_bar)
+            
+            if signal:
+                logger.info("")
+                logger.info("╔════════════════════════════════════════════════════════════╗")
+                logger.info("║            🔔 INTRA-BAR SIGNAL DETECTED                    ║")
+                logger.info("╠════════════════════════════════════════════════════════════╣")
+                logger.info(f"║  Signal: {signal.signal_type.value:<47}║")
+                logger.info(f"║  Direction: {signal.direction.value:<44}║")
+                logger.info(f"║  Price: ${live_bar.close:<46.2f}║")
+                logger.info("╚════════════════════════════════════════════════════════════╝")
+                logger.info("")
+                
+                # Mark that we fired a signal this bar
+                self._signal_fired_this_bar = True
+                self.signals_generated += 1
+                
+                # Execute if not locked out
+                if not self.position_manager.is_locked_out():
+                    self.execute_signal(signal)
+                else:
+                    logger.warning("Signal ignored - daily trade limit reached")
+                    
+        except Exception as e:
+            logger.debug(f"Error in intra-bar check: {e}")
+    
     def run_loop(self) -> None:
         """Main trading loop"""
         logger.info("Starting main trading loop...")
+        if self.config.enable_intra_bar_signals:
+            logger.info(f"Intra-bar signal checking ENABLED (every {self.config.intra_bar_check_interval}s)")
+        else:
+            logger.info("Intra-bar signals disabled - will only check on bar close")
         logger.info("Waiting for new 5-minute bar...")
         
         while self.running:
@@ -590,6 +710,13 @@ class TradingBot:
                         time.sleep(60)
                         continue
                 
+                # Check if we've moved to a new bar period
+                current_period = self._get_current_bar_period()
+                if self._current_bar_period != current_period:
+                    # New bar period - reset live bar tracking
+                    self._reset_live_bar()
+                    self._current_bar_period = current_period
+                
                 # Check risk management on existing position
                 if self.position_manager.has_position():
                     exit_reason = self.position_manager.update_position_price()
@@ -605,25 +732,35 @@ class TradingBot:
                                 if hasattr(trade, 'pnl') and trade.pnl is not None:
                                     self.tracker.record_trade(trade.pnl, trade.pnl > 0)
                 
-                # Check if we should process a new bar
+                # INTRA-BAR SIGNAL CHECK
+                # Check for signals on live bar (if not already fired this bar)
+                if not self._signal_fired_this_bar:
+                    self._check_intra_bar_signal()
+                
+                # Check if we should process a completed bar
                 if self.should_process_new_bar():
                     bar = self.get_current_bar()
                     
                     if bar:
                         if self._is_new_bar(bar):
-                            # This is a genuinely new bar - process it
-                            signal = self.process_bar(bar)
-                            
-                            # Track this bar's timestamp so we don't process it again
-                            self._last_processed_bar_time = bar.timestamp
-                            
-                            if signal:
-                                # Execute if not locked out
-                                if not self.position_manager.is_locked_out():
-                                    self.execute_signal(signal)
-                                else:
-                                    logger.warning("Signal ignored - daily trade limit reached")
-                        # else: same bar, skip silently (debug log in _is_new_bar)
+                            # This is a genuinely new completed bar
+                            # Skip signal check if we already fired intra-bar
+                            if self._signal_fired_this_bar:
+                                logger.info(f"Bar #{self.bars_processed + 1} closed - signal already fired intra-bar")
+                                # Still process bar to update state, but suppress signal
+                                self.detector.add_bar(bar, suppress_signals=False)
+                                self.bars_processed += 1
+                                self._last_processed_bar_time = bar.timestamp
+                            else:
+                                # Process normally
+                                signal = self.process_bar(bar)
+                                self._last_processed_bar_time = bar.timestamp
+                                
+                                if signal:
+                                    if not self.position_manager.is_locked_out():
+                                        self.execute_signal(signal)
+                                    else:
+                                        logger.warning("Signal ignored - daily trade limit reached")
                 
                 # Update balance periodically for drawdown tracking
                 if self.bars_processed > 0 and self.bars_processed % 6 == 0:  # Every 30 min
