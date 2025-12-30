@@ -583,7 +583,12 @@ def fetch_historical_data(
     
     logger.info("Connecting to Schwab API...")
     
-    auth = SchwabAuth()
+    # Use credentials from config
+    auth = SchwabAuth(
+        app_key=config.schwab.app_key,
+        app_secret=config.schwab.app_secret,
+        redirect_uri=config.schwab.redirect_uri
+    )
     if not auth.authenticate():
         raise RuntimeError("Failed to authenticate with Schwab")
     
