@@ -224,14 +224,28 @@ The bot starts in **paper trading mode** by default. To switch to live:
 ```
 tos_schwab_bot/
 ├── trading_bot.py       # Main bot application
-├── backtest.py          # Backtesting module
 ├── config.py            # Configuration settings
-├── schwab_auth.py       # OAuth2 authentication
-├── schwab_client.py     # Schwab API client
 ├── signal_detector.py   # Signal detection logic
 ├── position_manager.py  # Position/trade management
+├── schwab_auth.py       # OAuth2 authentication
+├── schwab_client.py     # Schwab API client
 ├── notifications.py     # Pushover push notifications
 ├── analytics.py         # Performance tracking & reporting
+│
+├── # Optimization Tools
+├── optimizer.py         # Grid search optimizer
+├── optimizer_smart.py   # Bayesian optimizer (Optuna)
+├── optimizer_multirun.py # Multi-run statistical analysis
+├── apply_config.py      # Apply optimized params to config + ThinkScript
+├── backtest.py          # Backtesting module
+│
+├── # ThinkScript Studies
+├── AMT_Complete_V2.ts   # Full AMT study (mean reversion + trend)
+├── AMT_Complete.ts      # Previous version
+├── AMT_Experimental.ts  # Experimental signals
+├── AMT_TrendDay.ts      # Trend day detection
+│
+├── # Utilities
 ├── bot.sh               # Background process management
 ├── requirements.txt     # Python dependencies
 ├── .env.template        # Environment template
@@ -284,6 +298,236 @@ tos_schwab_bot/
 3. Friday close: Send weekly report
 4. On position close: Record P&L, notify
 ```
+
+## Strategy Optimization
+
+The bot includes powerful optimization tools to find the best parameter combinations for your trading strategy.
+
+### Optimizer Options
+
+| Tool | Purpose | Best For |
+|------|---------|----------|
+| `optimizer.py` | Grid search (exhaustive) | Small parameter spaces, exact testing |
+| `optimizer_smart.py` | Bayesian optimization (Optuna) | Large parameter spaces, fast convergence |
+| `optimizer_multirun.py` | Statistical confidence testing | Validating results across multiple runs |
+
+### Quick Start
+
+```bash
+# Install Optuna (required for smart optimizer)
+pip install optuna
+
+# Run smart optimizer (recommended)
+python optimizer_smart.py --days 90 --trials 1000 --turbo
+
+# Apply optimized config
+python apply_config.py --from best_params.json
+```
+
+### Smart Optimizer (Recommended)
+
+The Bayesian optimizer uses Optuna's Tree-structured Parzen Estimator (TPE) to intelligently search the parameter space. It finds near-optimal parameters in 500-2000 trials instead of millions.
+
+```bash
+# Basic usage (90 days, 1000 trials)
+python optimizer_smart.py --days 90 --trials 1000 --turbo
+
+# Staged optimization (signal params first, then risk params)
+python optimizer_smart.py --days 90 --phase signal --trials 500 --save-best signal_params.json
+python optimizer_smart.py --days 90 --phase risk --lock signal_params.json --trials 500 --save-best final_params.json
+
+# Deep search with longer history
+python optimizer_smart.py --days 120 --trials 2000 --turbo
+```
+
+**Options:**
+- `--days N` - Days of historical data (default: 90)
+- `--trials N` - Number of optimization trials (default: 500)
+- `--turbo` - Use more CPU cores for parallel processing
+- `--phase [all|signal|risk]` - Optimize all params, signals only, or risk only
+- `--lock FILE` - Lock params from a previous run
+- `--save-best FILE` - Save best params to JSON
+- `--min-trades N` - Minimum trades for valid result (default: 30)
+
+### Multi-Run Optimizer (Statistical Confidence)
+
+Run the optimizer multiple times with different random seeds to build confidence in your parameter choices.
+
+```bash
+# Default: 5 runs with different seeds
+python optimizer_multirun.py --days 90 --trials 500 --turbo
+
+# More confidence: 10 runs
+python optimizer_multirun.py --runs 10 --days 90 --trials 500 --turbo
+
+# Custom seeds
+python optimizer_multirun.py --runs 3 --seeds "42,123,999"
+```
+
+**Output:**
+- `multirun_results/analysis.json` - Statistical analysis across all runs
+- `multirun_results/recommended_config.json` - Consensus parameters
+- Individual run results in `multirun_results/run_N_seed_X.json`
+
+**What It Shows:**
+```
+PARAMETER RECOMMENDATIONS
+
+Signal Enables:
+  enable_val_bounce........................ False  (1T/4F) [HIGH]
+  enable_vah_rejection..................... False  (0T/5F) [HIGH]
+  enable_poc_reclaim....................... True   (4T/1F) [HIGH]
+
+Numeric Parameters:
+  signal_cooldown_bars..................... 15     (range: 12-18) [HIGH]
+  kelly_fraction........................... 0.234  (range: 0.1-0.4) [MED]
+```
+
+Confidence levels:
+- **HIGH (≥80%)** - Parameter is stable, trust it
+- **MED (60-80%)** - Somewhat stable
+- **LOW (<60%)** - Unstable, may not matter much
+
+### Grid Search Optimizer (Exhaustive)
+
+For smaller parameter spaces or when you want to test every combination.
+
+```bash
+# Fast mode (~500 combinations, ~20 sec)
+python optimizer.py --fast
+
+# Risk-focused mode (~2,880 combinations, ~2 min)
+python optimizer.py --risk
+
+# Full mode (~10,000 combinations, ~5 min)
+python optimizer.py --full
+
+# Custom settings
+python optimizer.py --days 60 --capital 25000
+```
+
+### Parameters Being Optimized
+
+**Signal Parameters:**
+| Parameter | Range | Description |
+|-----------|-------|-------------|
+| `signal_cooldown_bars` | 5-25 | Bars between signals |
+| `min_confirmation_bars` | 1-5 | Bars to confirm signal |
+| `sustained_bars_required` | 2-6 | Bars for sustained breakout |
+| `volume_threshold` | 1.0-2.0 | Volume multiplier |
+
+**Signal Enables (Boolean):**
+- `enable_val_bounce`, `enable_vah_rejection`
+- `enable_poc_reclaim`, `enable_poc_breakdown`
+- `enable_breakout`, `enable_breakdown`
+- `enable_sustained_breakout`, `enable_sustained_breakdown`
+
+**Filters:**
+- `use_time_filter` - Morning-only trading
+- `use_or_bias_filter` - Opening range bias filter
+
+**Delta Targeting:**
+| Parameter | Range | Description |
+|-----------|-------|-------------|
+| `target_delta` | 0.20-0.40 | Morning delta target |
+| `afternoon_delta` | 0.30-0.50 | Afternoon delta target |
+| `afternoon_hour` | 11-14 | Hour to switch deltas |
+
+**Kelly Position Sizing:**
+| Parameter | Range | Description |
+|-----------|-------|-------------|
+| `kelly_fraction` | 0.0-3.0 | Kelly multiplier (0=fixed, 1=full Kelly) |
+| `max_equity_risk` | 0.05-0.30 | Max % equity per trade |
+| `max_kelly_pct_cap` | 0.15-0.40 | Cap on raw Kelly % |
+| `hard_max_contracts` | 20-150 | Absolute contract limit |
+| `kelly_lookback` | 10-30 | Rolling window for Kelly stats |
+
+**Risk Management:**
+| Parameter | Range | Description |
+|-----------|-------|-------------|
+| `max_daily_trades` | 1-10 | Max trades per day |
+| `enable_stop_loss` | T/F | Enable stop loss |
+| `stop_loss_percent` | 20-70 | Stop loss % |
+| `enable_take_profit` | T/F | Enable take profit |
+| `take_profit_percent` | 40-200 | Take profit % |
+| `enable_trailing_stop` | T/F | Enable trailing stop |
+| `min_hold_bars` | 0-10 | Min bars before exit |
+
+### Applying Optimized Config
+
+After optimization, apply the results to your config and ThinkScript:
+
+```bash
+# Preview changes (no files written)
+python apply_config.py --from multirun_results/recommended_config.json --preview
+
+# Apply config (writes config.py + AMT_Optimized.ts)
+python apply_config.py --from multirun_results/recommended_config.json
+
+# With backup of existing files
+python apply_config.py --from best_params.json --backup
+```
+
+This generates:
+- `config.py` - Updated Python bot configuration
+- `AMT_Optimized.ts` - Updated ThinkScript with matching signal parameters
+
+### Running Long Optimizations
+
+For long-running optimizations (overnight, closing laptop):
+
+```bash
+# Using nohup (simplest)
+nohup python optimizer_multirun.py --runs 10 --days 90 --trials 1000 --turbo > multirun.log 2>&1 &
+tail -f multirun.log
+
+# Using screen (recommended)
+screen -S optimizer
+caffeinate -i python optimizer_multirun.py --runs 10 --days 90 --trials 1000 --turbo
+# Press Ctrl+A, then D to detach
+# Later: screen -r optimizer
+
+# To cancel
+pkill -f optimizer
+```
+
+### Time Estimates (M1 Max with --turbo)
+
+| Mode | Combinations | Time |
+|------|--------------|------|
+| Grid --fast | 512 | ~20 sec |
+| Grid --risk | 2,880 | ~2 min |
+| Grid --full | 10,000 | ~5 min |
+| Smart (500 trials) | 500 | ~2 min |
+| Smart (1000 trials) | 1,000 | ~3 min |
+| Smart (2000 trials) | 2,000 | ~5 min |
+| Multirun (5x500) | 2,500 | ~10 min |
+
+### Recommended Workflow
+
+1. **Initial exploration** - Smart optimizer with 500 trials
+   ```bash
+   python optimizer_smart.py --days 90 --trials 500 --turbo --save-best initial.json
+   ```
+
+2. **Build confidence** - Multi-run with 5-10 seeds
+   ```bash
+   python optimizer_multirun.py --runs 5 --days 90 --trials 500 --turbo
+   ```
+
+3. **Validate on different period** - Test on 120 days
+   ```bash
+   python optimizer_smart.py --days 120 --trials 1000 --turbo
+   ```
+
+4. **Apply results**
+   ```bash
+   python apply_config.py --from multirun_results/recommended_config.json --backup
+   ```
+
+5. **Update ThinkScript** - Copy `AMT_Optimized.ts` contents to ToS
+
+---
 
 ## Backtesting
 
