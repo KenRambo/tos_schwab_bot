@@ -96,7 +96,20 @@ class SignalDetector:
         or_buffer_points: float = 1.0,
         opening_range_minutes: int = 30,
         use_time_filter: bool = False,
-        rth_only: bool = True
+        rth_only: bool = True,
+        # Signal enable/disable flags
+        enable_val_bounce: bool = True,
+        enable_poc_reclaim: bool = True,
+        enable_breakout: bool = True,
+        enable_sustained_breakout: bool = True,
+        enable_prior_val_bounce: bool = True,
+        enable_prior_poc_reclaim: bool = True,
+        enable_vah_rejection: bool = True,
+        enable_poc_breakdown: bool = True,
+        enable_breakdown: bool = True,
+        enable_sustained_breakdown: bool = True,
+        enable_prior_vah_rejection: bool = True,
+        enable_prior_poc_breakdown: bool = True
     ):
         # Configuration
         self.length_period = length_period
@@ -111,6 +124,20 @@ class SignalDetector:
         self.opening_range_minutes = opening_range_minutes
         self.use_time_filter = use_time_filter
         self.rth_only = rth_only
+        
+        # Signal enable flags
+        self.enable_val_bounce = enable_val_bounce
+        self.enable_poc_reclaim = enable_poc_reclaim
+        self.enable_breakout = enable_breakout
+        self.enable_sustained_breakout = enable_sustained_breakout
+        self.enable_prior_val_bounce = enable_prior_val_bounce
+        self.enable_prior_poc_reclaim = enable_prior_poc_reclaim
+        self.enable_vah_rejection = enable_vah_rejection
+        self.enable_poc_breakdown = enable_poc_breakdown
+        self.enable_breakdown = enable_breakdown
+        self.enable_sustained_breakdown = enable_sustained_breakdown
+        self.enable_prior_vah_rejection = enable_prior_vah_rejection
+        self.enable_prior_poc_breakdown = enable_prior_poc_breakdown
         
         # State
         self.bars: Deque[Bar] = deque(maxlen=length_period * 2)
@@ -496,7 +523,7 @@ class SignalDetector:
         val_touch = bar.low <= va.val and bar.close > va.val
         val_bounce = val_touch and vol_condition and bar.close > bar.open
         
-        if val_bounce and allow_long and self._check_or_allows(Direction.LONG):
+        if self.enable_val_bounce and val_bounce and allow_long and self._check_or_allows(Direction.LONG):
             return Signal(
                 signal_type=SignalType.VAL_BOUNCE,
                 direction=Direction.LONG,
@@ -512,7 +539,7 @@ class SignalDetector:
         # 2. POC Reclaim
         poc_reclaim = prev_below_poc and price_above_poc and vol_increasing
         
-        if poc_reclaim and allow_long and self._check_or_allows(Direction.LONG):
+        if self.enable_poc_reclaim and poc_reclaim and allow_long and self._check_or_allows(Direction.LONG):
             return Signal(
                 signal_type=SignalType.POC_RECLAIM,
                 direction=Direction.LONG,
@@ -526,7 +553,7 @@ class SignalDetector:
             )
         
         # 3. Breakout (accepted above VAH)
-        if self.bars_above_vah >= self.min_confirmation_bars:
+        if self.enable_breakout and self.bars_above_vah >= self.min_confirmation_bars:
             breakout = not prev_above_vah and price_above_vah and vol_condition
             if breakout and allow_long and self._check_or_allows(Direction.LONG):
                 return Signal(
@@ -542,7 +569,7 @@ class SignalDetector:
                 )
         
         # 4. Sustained Breakout
-        if self.bars_above_vah >= self.sustained_bars_required:
+        if self.enable_sustained_breakout and self.bars_above_vah >= self.sustained_bars_required:
             prev_bars_above = self.bars_above_vah - 1
             if prev_bars_above < self.sustained_bars_required:
                 if allow_long and self._check_or_allows(Direction.LONG):
@@ -564,7 +591,7 @@ class SignalDetector:
         vah_touch = bar.high >= va.vah and bar.close < va.vah
         vah_rejection = vah_touch and vol_condition and bar.close < bar.open
         
-        if vah_rejection and allow_short and self._check_or_allows(Direction.SHORT):
+        if self.enable_vah_rejection and vah_rejection and allow_short and self._check_or_allows(Direction.SHORT):
             return Signal(
                 signal_type=SignalType.VAH_REJECTION,
                 direction=Direction.SHORT,
@@ -580,7 +607,7 @@ class SignalDetector:
         # 2. POC Breakdown
         poc_breakdown = prev_above_poc and price_below_poc and vol_increasing
         
-        if poc_breakdown and allow_short and self._check_or_allows(Direction.SHORT):
+        if self.enable_poc_breakdown and poc_breakdown and allow_short and self._check_or_allows(Direction.SHORT):
             return Signal(
                 signal_type=SignalType.POC_BREAKDOWN,
                 direction=Direction.SHORT,
@@ -594,7 +621,7 @@ class SignalDetector:
             )
         
         # 3. Breakdown (accepted below VAL)
-        if self.bars_below_val >= self.min_confirmation_bars:
+        if self.enable_breakdown and self.bars_below_val >= self.min_confirmation_bars:
             breakdown = not prev_below_val and price_below_val and vol_condition
             if breakdown and allow_short and self._check_or_allows(Direction.SHORT):
                 return Signal(
@@ -610,7 +637,7 @@ class SignalDetector:
                 )
         
         # 4. Sustained Breakdown
-        if self.bars_below_val >= self.sustained_bars_required:
+        if self.enable_sustained_breakdown and self.bars_below_val >= self.sustained_bars_required:
             prev_bars_below = self.bars_below_val - 1
             if prev_bars_below < self.sustained_bars_required:
                 if allow_short and self._check_or_allows(Direction.SHORT):
@@ -633,7 +660,7 @@ class SignalDetector:
             prior_val_touch = bar.low <= self.prior_day_val and bar.close > self.prior_day_val
             prior_val_bounce = prior_val_touch and vol_condition and bar.close > bar.open
             
-            if prior_val_bounce and allow_long and self._check_or_allows(Direction.LONG):
+            if self.enable_prior_val_bounce and prior_val_bounce and allow_long and self._check_or_allows(Direction.LONG):
                 return Signal(
                     signal_type=SignalType.PRIOR_VAL_BOUNCE,
                     direction=Direction.LONG,
@@ -650,7 +677,7 @@ class SignalDetector:
             prior_vah_touch = bar.high >= self.prior_day_vah and bar.close < self.prior_day_vah
             prior_vah_rejection = prior_vah_touch and vol_condition and bar.close < bar.open
             
-            if prior_vah_rejection and allow_short and self._check_or_allows(Direction.SHORT):
+            if self.enable_prior_vah_rejection and prior_vah_rejection and allow_short and self._check_or_allows(Direction.SHORT):
                 return Signal(
                     signal_type=SignalType.PRIOR_VAH_REJECTION,
                     direction=Direction.SHORT,

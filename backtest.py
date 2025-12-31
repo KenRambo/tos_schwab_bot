@@ -7,8 +7,6 @@ Usage:
     python backtest.py --start 2024-12-01 # From specific date
     python backtest.py --output results.csv  # Export trades to CSV
 """
-from dotenv import load_dotenv
-load_dotenv()
 import os
 import sys
 import logging
@@ -162,7 +160,20 @@ class Backtester:
             signal_cooldown_bars=self.signal_config.signal_cooldown_bars,
             use_or_bias_filter=self.signal_config.use_or_bias_filter,
             or_buffer_points=self.signal_config.or_buffer_points,
-            rth_only=True
+            rth_only=True,
+            # Signal enable/disable flags
+            enable_val_bounce=getattr(self.signal_config, 'enable_val_bounce', True),
+            enable_poc_reclaim=getattr(self.signal_config, 'enable_poc_reclaim', True),
+            enable_breakout=getattr(self.signal_config, 'enable_breakout', True),
+            enable_sustained_breakout=getattr(self.signal_config, 'enable_sustained_breakout', True),
+            enable_prior_val_bounce=getattr(self.signal_config, 'enable_prior_val_bounce', True),
+            enable_prior_poc_reclaim=getattr(self.signal_config, 'enable_prior_poc_reclaim', True),
+            enable_vah_rejection=getattr(self.signal_config, 'enable_vah_rejection', True),
+            enable_poc_breakdown=getattr(self.signal_config, 'enable_poc_breakdown', True),
+            enable_breakdown=getattr(self.signal_config, 'enable_breakdown', True),
+            enable_sustained_breakdown=getattr(self.signal_config, 'enable_sustained_breakdown', True),
+            enable_prior_vah_rejection=getattr(self.signal_config, 'enable_prior_vah_rejection', True),
+            enable_prior_poc_breakdown=getattr(self.signal_config, 'enable_prior_poc_breakdown', True)
         )
     
     def _get_delta_for_time(self, bar_time: datetime) -> float:
@@ -570,7 +581,7 @@ def fetch_historical_data(
     start_date: date = None
 ) -> List[Dict]:
     """
-    Fetch historical bar data from Schwab API.
+    Fetch historical bar data from Schwab API in small chunks to avoid timeouts.
     
     Args:
         symbol: Stock symbol
@@ -580,44 +591,142 @@ def fetch_historical_data(
     Returns:
         List of bar dicts
     """
+    import time as time_module
     from schwab_auth import SchwabAuth
     from schwab_client import SchwabClient
     
-    logger.info("Connecting to Schwab API...")
+    print("Connecting to Schwab API...")
     
-    # Use credentials from config
+    # Use credentials from config (same as trading_bot)
     auth = SchwabAuth(
         app_key=config.schwab.app_key,
         app_secret=config.schwab.app_secret,
-        redirect_uri=config.schwab.redirect_uri
+        redirect_uri=config.schwab.redirect_uri,
+        token_file=config.schwab.token_file
     )
-    if not auth.authenticate():
-        raise RuntimeError("Failed to authenticate with Schwab")
+    
+    # Check if we have valid tokens, refresh if needed
+    if not auth.is_authenticated:
+        print("No valid tokens - starting auth flow...")
+        if not auth.authorize_interactive():
+            raise RuntimeError("Failed to authenticate with Schwab")
+    else:
+        # Try to refresh the token
+        auth.refresh_access_token()
     
     client = SchwabClient(auth)
     
     # Calculate date range
+    calendar_days_needed = int(days * 1.5)  # Account for weekends
     end = datetime.now()
     if start_date:
         start = datetime.combine(start_date, dt_time(0, 0))
     else:
-        # Go back extra days to account for weekends/holidays
-        start = end - timedelta(days=int(days * 1.5))
+        start = end - timedelta(days=calendar_days_needed)
     
-    logger.info(f"Fetching {symbol} data from {start.date()} to {end.date()}...")
+    print(f"Fetching {days} trading days of {symbol} data...")
     
-    bars = client.get_price_history(
-        symbol=symbol,
-        period_type="day",
-        period=days + 15,  # Extra buffer
-        frequency_type="minute",
-        frequency=5,
-        extended_hours=False,  # RTH only for cleaner backtest
-        start_date=start,
-        end_date=end
-    )
+    all_bars = []
     
-    logger.info(f"Fetched {len(bars)} bars")
+    # Schwab API limitation: max 10 days of minute data per request
+    # Use 7-day chunks to be safe
+    chunk_size_days = 7
+    num_chunks = (calendar_days_needed // chunk_size_days) + 2
+    
+    chunk_end = end
+    successful_chunks = 0
+    failed_chunks = 0
+    start_time = time_module.time()
+    last_refresh_time = start_time
+    bar_width = 40
+    
+    for chunk_num in range(num_chunks):
+        chunk_start = chunk_end - timedelta(days=chunk_size_days)
+        
+        if chunk_start < start:
+            chunk_start = start
+        
+        if chunk_end <= start:
+            break
+        
+        # Proactively refresh token every 5 minutes to avoid expiration mid-fetch
+        current_time = time_module.time()
+        if current_time - last_refresh_time > 300:  # 5 minutes
+            try:
+                auth.refresh_access_token()
+                last_refresh_time = current_time
+            except Exception as e:
+                print(f"\n  ⚠ Token refresh failed: {e}")
+        
+        # Progress bar
+        progress = (chunk_num + 1) / num_chunks
+        elapsed = time_module.time() - start_time
+        if progress > 0:
+            eta = (elapsed / progress) - elapsed
+        else:
+            eta = 0
+        
+        filled = int(bar_width * progress)
+        bar = '█' * filled + '░' * (bar_width - filled)
+        
+        print(f"\r  [{bar}] {progress*100:5.1f}% | ETA: {eta:5.1f}s", end='', flush=True)
+        
+        try:
+            chunk_bars = client.get_price_history(
+                symbol=symbol,
+                period_type="day",
+                period=10,
+                frequency_type="minute",
+                frequency=5,
+                extended_hours=False,
+                start_date=chunk_start,
+                end_date=chunk_end
+            )
+            
+            if chunk_bars:
+                all_bars = chunk_bars + all_bars
+                successful_chunks += 1
+                
+        except Exception as e:
+            failed_chunks += 1
+            # If auth error, try to re-authenticate
+            if "401" in str(e) or "Unauthorized" in str(e):
+                try:
+                    print(f"\n  Refreshing token...")
+                    auth.refresh_access_token()
+                    last_refresh_time = time_module.time()
+                except:
+                    pass
+        
+        # Move window back
+        chunk_end = chunk_start
+        
+        # Small delay between API calls to avoid rate limiting
+        if chunk_num < num_chunks - 1:
+            time_module.sleep(0.5)
+    
+    # Complete progress bar
+    print(f"\r  [{'█' * bar_width}] 100.0% | Done!     ")
+    
+    # Remove duplicates and sort
+    seen = set()
+    unique_bars = []
+    for bar in sorted(all_bars, key=lambda x: x['datetime']):
+        bar_key = bar['datetime'].isoformat()
+        if bar_key not in seen:
+            seen.add(bar_key)
+            unique_bars.append(bar)
+    
+    bars = unique_bars
+    
+    # Calculate actual trading days
+    trading_dates = set(bar['datetime'].date() for bar in bars)
+    actual_trading_days = len(trading_dates)
+    
+    print(f"  ✓ {len(bars):,} bars across {actual_trading_days} trading days")
+    
+    if failed_chunks > 0:
+        print(f"  ⚠ {failed_chunks} chunks failed")
     
     return bars
 

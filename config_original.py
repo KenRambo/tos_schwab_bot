@@ -56,7 +56,7 @@ class TradingConfig:
     
     # Position Sizing - Fixed Fractional
     use_fixed_fractional: bool = True
-    risk_percent_per_trade: float = 30.0
+    risk_percent_per_trade: float = 2.0
     max_position_size: int = 10
     min_position_size: int = 1
     

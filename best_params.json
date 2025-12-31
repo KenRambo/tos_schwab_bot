@@ -1,0 +1,39 @@
+{
+  "metrics": {
+    "max_drawdown": 331.1909999999971,
+    "profit_factor": 4.004873634529666,
+    "score": 1.2249747315000001,
+    "sharpe_ratio": 5.83827579422383,
+    "total_pnl": 4713.578499999991,
+    "total_trades": 50,
+    "win_rate": 68.0
+  },
+  "params": {
+    "enable_breakdown": true,
+    "enable_breakout": true,
+    "enable_poc_breakdown": false,
+    "enable_poc_reclaim": false,
+    "enable_stop_loss": false,
+    "enable_sustained_breakdown": false,
+    "enable_sustained_breakout": false,
+    "enable_take_profit": true,
+    "enable_trailing_stop": false,
+    "enable_vah_rejection": true,
+    "enable_val_bounce": true,
+    "hard_max_contracts": 43,
+    "kelly_fraction": 0.13047045048996503,
+    "max_equity_risk": 0.35889896633362794,
+    "max_kelly_pct_cap": 0.15387317776824386,
+    "min_confirmation_bars": 4,
+    "min_hold_bars": 0,
+    "signal_cooldown_bars": 18,
+    "stop_loss_percent": 50,
+    "sustained_bars_required": 2,
+    "take_profit_percent": 80,
+    "trailing_stop_activation": 50,
+    "trailing_stop_percent": 25,
+    "use_or_bias_filter": true,
+    "use_time_filter": true,
+    "volume_threshold": 1.1802243985866507
+  }
+}
