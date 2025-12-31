@@ -8,9 +8,6 @@ Strategy: Hold until opposite signal
 - LONG signal -> Buy nearest OTM CALL
 - SHORT signal -> Close CALL, Buy nearest OTM PUT
 """
-from dotenv import load_dotenv
-load_dotenv()
-
 import os
 import sys
 import time
@@ -244,12 +241,28 @@ class TradingBot:
             return False
     
     def _load_historical_bars(self):
-        """Load historical bars to initialize the signal detector"""
+        """Load historical bars to initialize the signal detector - FULL DAY from 9:30 AM"""
         try:
-            # Load full day of bars to capture Opening Range (9:30-10:00 AM)
-            # A full RTH day is about 78 bars (6.5 hours * 12 bars/hour)
-            # We load more to ensure we get OR period
-            num_bars = max(self.config.signal.length_period + 10, 100)  # At least 100 bars
+            from datetime import datetime, timedelta
+            import pytz
+            
+            et = pytz.timezone('US/Eastern')
+            now_et = datetime.now(et)
+            
+            # Calculate bars needed from 9:30 AM today to now
+            market_open = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
+            
+            if now_et < market_open:
+                # Before market open - load previous day's data
+                logger.info("Before market open - loading previous day data")
+                num_bars = 100
+            else:
+                # Calculate how many 5-min bars since market open
+                minutes_since_open = (now_et - market_open).total_seconds() / 60
+                num_bars = int(minutes_since_open / 5) + 10  # +10 for buffer
+                num_bars = max(num_bars, 100)  # At least 100 bars
+                logger.info(f"Market open, loading {num_bars} bars to cover full day from 9:30 AM")
+            
             logger.info(f"Loading last {num_bars} bars to initialize detector...")
             
             bars = self.client.get_recent_bars(
@@ -265,11 +278,21 @@ class TradingBot:
             
             logger.info(f"Loaded {len(bars)} historical bars")
             
-            # Check if we have OR period bars (9:30 - 10:00 AM)
+            # Filter to only TODAY's bars for proper state initialization
             today = date.today()
-            or_bars = [b for b in bars if b['datetime'].date() == today 
+            todays_bars = [b for b in bars if b['datetime'].date() == today]
+            
+            if todays_bars:
+                logger.info(f"Found {len(todays_bars)} bars from today (filtering out prior days)")
+                bars_to_process = todays_bars
+            else:
+                logger.warning("No bars from today found - using all historical bars")
+                bars_to_process = bars
+            
+            # Check if we have OR period bars (9:30 - 10:00 AM)
+            or_bars = [b for b in bars_to_process if b['datetime'].date() == today 
                        and b['datetime'].hour == 9 and b['datetime'].minute >= 30]
-            or_bars += [b for b in bars if b['datetime'].date() == today 
+            or_bars += [b for b in bars_to_process if b['datetime'].date() == today 
                         and b['datetime'].hour == 10 and b['datetime'].minute == 0]
             
             if or_bars:
@@ -279,7 +302,7 @@ class TradingBot:
             
             # Feed bars to detector WITH suppress_signals=True
             # This builds up the value area context without triggering trades
-            for bar_data in bars:
+            for bar_data in bars_to_process:
                 bar = Bar(
                     timestamp=bar_data['datetime'],
                     open=bar_data['open'],
@@ -297,8 +320,8 @@ class TradingBot:
             logger.info("╔════════════════════════════════════════════════════════════╗")
             logger.info("║          DETECTOR INITIALIZED WITH HISTORICAL DATA         ║")
             logger.info("╠════════════════════════════════════════════════════════════╣")
-            logger.info(f"║  Bars Loaded:  {len(bars):<43}║")
-            logger.info(f"║  Time Range:   {bars[0]['datetime'].strftime('%H:%M')} - {bars[-1]['datetime'].strftime('%H:%M')} ET{' ' * 32}║")
+            logger.info(f"║  Bars Loaded:  {len(bars_to_process):<43}║")
+            logger.info(f"║  Time Range:   {bars_to_process[0]['datetime'].strftime('%H:%M')} - {bars_to_process[-1]['datetime'].strftime('%H:%M')} ET{' ' * 32}║")
             
             if state['vah'] > 0:
                 logger.info("╠════════════════════════════════════════════════════════════╣")
@@ -307,6 +330,11 @@ class TradingBot:
                 logger.info(f"║  VAL:  ${state['val']:<9.2f}                                      ║")
             else:
                 logger.info("║  Value Area:   Still building...                          ║")
+            
+            # Show bars_above_vah state
+            logger.info("╠════════════════════════════════════════════════════════════╣")
+            logger.info(f"║  Bars Above VAH: {state.get('bars_above_vah', 0):<41}║")
+            logger.info(f"║  Bars Below VAL: {state.get('bars_below_val', 0):<41}║")
             
             if state['or_complete']:
                 import math
@@ -326,7 +354,7 @@ class TradingBot:
             
             # Set last processed bar time to the last historical bar
             # This prevents re-processing the same bar
-            self._last_processed_bar_time = bars[-1]['datetime']
+            self._last_processed_bar_time = bars_to_process[-1]['datetime']
             logger.info(f"Last historical bar: {self._last_processed_bar_time.strftime('%Y-%m-%d %H:%M ET')}")
             logger.info("Will only process bars AFTER this timestamp")
             logger.info("")

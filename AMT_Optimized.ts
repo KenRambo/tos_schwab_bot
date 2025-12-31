@@ -1,260 +1,6 @@
-"""
-Apply Optimized Configuration
-==============================
-
-Reads optimization results (JSON) and:
-1. Updates config.py with new parameters
-2. Generates updated ThinkScript (.ts) file
-
-Usage:
-    python apply_config.py --from multirun_results/recommended_config.json
-    python apply_config.py --from best_params.json --preview  # Preview only, don't write
-    python apply_config.py --from multirun_results/analysis.json  # Also works with analysis.json
-"""
-import os
-import sys
-import json
-import argparse
-from datetime import datetime
-from typing import Dict, Any
-
-
-def load_params(filepath: str) -> Dict[str, Any]:
-    """Load parameters from JSON file (handles multiple formats)"""
-    with open(filepath, "r") as f:
-        data = json.load(f)
-    
-    # Handle different JSON structures
-    if "recommended_config" in data:
-        # From analysis.json
-        return data["recommended_config"]
-    elif "params" in data:
-        # From best_params.json or individual run
-        return data["params"]
-    else:
-        # Direct params dict
-        return data
-
-
-def generate_config_py(params: Dict[str, Any]) -> str:
-    """Generate updated config.py content matching BotConfig structure for trading_bot.py"""
-    
-    # Extract params with defaults
-    p = params
-    
-    config_content = f'''"""
-Configuration settings for the ToS Signal Trading Bot
-======================================================
-Auto-generated from optimization results on {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-
-To regenerate: python apply_config.py --from <results.json>
-"""
-import os
-from dataclasses import dataclass, field
-from typing import Optional
-from datetime import time
-
-@dataclass
-class SchwabConfig:
-    """Schwab API configuration"""
-    app_key: str = os.getenv("SCHWAB_APP_KEY", "")
-    app_secret: str = os.getenv("SCHWAB_APP_SECRET", "")
-    redirect_uri: str = os.getenv("SCHWAB_REDIRECT_URI", "https://127.0.0.1:8182/callback")
-    token_file: str = "schwab_tokens.json"
-    account_hash: Optional[str] = None  # Will be fetched on first run
-
-
-@dataclass
-class TradingConfig:
-    """Trading parameters - OPTIMIZED"""
-    symbol: str = "SPY"
-    contracts: int = 1
-    max_daily_trades: int = {p.get('max_daily_trades', 3)}  # OPTIMIZED
-    
-    # Option selection - OPTIMIZED
-    use_delta_targeting: bool = True
-    target_delta: float = {p.get('target_delta', 0.30):.2f}  # OPTIMIZED
-    afternoon_delta: float = {p.get('afternoon_delta', 0.40):.2f}  # OPTIMIZED
-    afternoon_start_hour: int = {p.get('afternoon_hour', 12)}  # OPTIMIZED
-    min_days_to_expiry: int = 0
-    max_days_to_expiry: int = 0
-    prefer_weekly: bool = True
-    
-    # Position management
-    hold_until_opposite_signal: bool = True
-    
-    # Position Sizing - Kelly - OPTIMIZED
-    use_fixed_fractional: bool = True
-    risk_percent_per_trade: float = {p.get('max_equity_risk', 0.10) * 100:.1f}  # OPTIMIZED (converted to %)
-    max_position_size: int = {p.get('hard_max_contracts', 100)}  # OPTIMIZED
-    min_position_size: int = 1
-    
-    # Kelly-specific params
-    kelly_fraction: float = {p.get('kelly_fraction', 0.0):.3f}  # OPTIMIZED
-    max_kelly_pct_cap: float = {p.get('max_kelly_pct_cap', 0.35):.3f}  # OPTIMIZED
-    kelly_lookback: int = {p.get('kelly_lookback', 20)}  # OPTIMIZED
-    
-    # Risk management - Daily Loss Limit
-    enable_daily_loss_limit: bool = True
-    max_daily_loss_dollars: float = 500.0
-    max_daily_loss_percent: float = 5.0
-    
-    # Risk management - Stop Loss - OPTIMIZED
-    enable_stop_loss: bool = {p.get('enable_stop_loss', False)}  # OPTIMIZED
-    stop_loss_percent: float = {p.get('stop_loss_percent', 50.0):.1f}  # OPTIMIZED
-    stop_loss_dollars: float = 500.0
-    
-    # Risk management - Take Profit - OPTIMIZED
-    enable_take_profit: bool = {p.get('enable_take_profit', False)}  # OPTIMIZED
-    take_profit_percent: float = {p.get('take_profit_percent', 100.0):.1f}  # OPTIMIZED
-    take_profit_dollars: float = 500.0
-    
-    # Risk management - Trailing Stop - OPTIMIZED
-    enable_trailing_stop: bool = {p.get('enable_trailing_stop', False)}  # OPTIMIZED
-    trailing_stop_percent: float = {p.get('trailing_stop_percent', 25.0):.1f}  # OPTIMIZED
-    trailing_stop_activation: float = {p.get('trailing_stop_activation', 50.0):.1f}  # OPTIMIZED
-    
-    # Min hold time - OPTIMIZED
-    min_hold_bars: int = {p.get('min_hold_bars', 0)}  # OPTIMIZED
-    
-    # Correlation / Exposure Check
-    enable_correlation_check: bool = True
-    max_delta_exposure: float = 100.0
-
-
-@dataclass
-class TimeConfig:
-    """Trading hours configuration (Eastern Time)"""
-    market_open: time = field(default_factory=lambda: time(9, 30))
-    market_close: time = field(default_factory=lambda: time(16, 0))
-    
-    # Opening range period
-    or_start: time = field(default_factory=lambda: time(9, 30))
-    or_end: time = field(default_factory=lambda: time(10, 0))
-    
-    # Avoid trading during these periods
-    avoid_first_minutes: int = 25
-    avoid_lunch_start: time = field(default_factory=lambda: time(12, 0))
-    avoid_lunch_end: time = field(default_factory=lambda: time(13, 30))
-    avoid_last_minutes: int = 15
-    
-    use_time_filter: bool = {p.get('use_time_filter', False)}  # OPTIMIZED
-    rth_only: bool = True
-
-
-@dataclass 
-class SignalConfig:
-    """Signal detection configuration - OPTIMIZED"""
-    # Value area settings
-    length_period: int = 20
-    value_area_percent: float = 70.0
-    
-    # Volume thresholds - OPTIMIZED
-    volume_threshold: float = {p.get('volume_threshold', 1.3):.3f}  # OPTIMIZED
-    use_relaxed_volume: bool = True
-    
-    # Confirmation - OPTIMIZED
-    min_confirmation_bars: int = {p.get('min_confirmation_bars', 2)}  # OPTIMIZED
-    sustained_bars_required: int = {p.get('sustained_bars_required', 3)}  # OPTIMIZED
-    signal_cooldown_bars: int = {p.get('signal_cooldown_bars', 8)}  # OPTIMIZED
-    
-    # Opening range bias - OPTIMIZED
-    use_or_bias_filter: bool = {p.get('use_or_bias_filter', True)}  # OPTIMIZED
-    or_buffer_points: float = 1.0
-    
-    # Minimum move for credit
-    min_es_point_move: float = 6.0
-    
-    # Signal enables - LONG signals - OPTIMIZED
-    enable_val_bounce: bool = {p.get('enable_val_bounce', True)}  # OPTIMIZED
-    enable_poc_reclaim: bool = {p.get('enable_poc_reclaim', True)}  # OPTIMIZED
-    enable_breakout: bool = {p.get('enable_breakout', True)}  # OPTIMIZED
-    enable_sustained_breakout: bool = {p.get('enable_sustained_breakout', True)}  # OPTIMIZED
-    
-    # Signal enables - SHORT signals - OPTIMIZED
-    enable_vah_rejection: bool = {p.get('enable_vah_rejection', True)}  # OPTIMIZED
-    enable_poc_breakdown: bool = {p.get('enable_poc_breakdown', True)}  # OPTIMIZED
-    enable_breakdown: bool = {p.get('enable_breakdown', True)}  # OPTIMIZED
-    enable_sustained_breakdown: bool = {p.get('enable_sustained_breakdown', True)}  # OPTIMIZED
-
-
-@dataclass
-class AlertConfig:
-    """Alert/notification settings"""
-    enable_discord: bool = False
-    discord_webhook: str = os.getenv("DISCORD_WEBHOOK", "")
-    
-    enable_telegram: bool = False
-    telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    telegram_chat_id: str = os.getenv("TELEGRAM_CHAT_ID", "")
-    
-    log_to_file: bool = True
-    log_file: str = "trading_bot.log"
-
-
-@dataclass
-class AnalyticsConfig:
-    """Analytics and reporting settings"""
-    enable_daily_summary: bool = True
-    daily_summary_hour: int = 16
-    daily_summary_minute: int = 15
-    
-    enable_weekly_report: bool = True
-    
-    enable_drawdown_alerts: bool = True
-    drawdown_alert_threshold: float = 10.0
-    
-    performance_data_file: str = "performance_data.json"
-
-
-@dataclass
-class BotConfig:
-    """Main bot configuration"""
-    schwab: SchwabConfig = field(default_factory=SchwabConfig)
-    trading: TradingConfig = field(default_factory=TradingConfig)
-    time: TimeConfig = field(default_factory=TimeConfig)
-    signal: SignalConfig = field(default_factory=SignalConfig)
-    alert: AlertConfig = field(default_factory=AlertConfig)
-    analytics: AnalyticsConfig = field(default_factory=AnalyticsConfig)
-    
-    # Data source
-    data_poll_interval: int = 5
-    use_streaming: bool = True
-    
-    # Intra-bar signal checking
-    enable_intra_bar_signals: bool = True
-    intra_bar_check_interval: int = 15
-    
-    # Paper trading mode
-    paper_trading: bool = True  # Set to False for live trading
-    
-    def validate(self) -> bool:
-        """Validate configuration"""
-        if not self.schwab.app_key or not self.schwab.app_secret:
-            raise ValueError("Schwab API credentials not configured")
-        return True
-
-
-# Default configuration instance
-config = BotConfig()
-'''
-    
-    return config_content
-
-
-def generate_thinkscript(params: Dict[str, Any]) -> str:
-    """Generate updated ThinkScript with optimized signal parameters - V3.5 format"""
-    
-    p = params
-    
-    # Convert Python bools to ThinkScript yes/no
-    def ts_yn(val, default=True):
-        v = val if val is not None else default
-        return "yes" if v else "no"
-    
-    thinkscript = f'''# Auction Market Theory Indicator with Trade Signals - V3.5 OPTIMIZED
+# Auction Market Theory Indicator with Trade Signals - V3.5 OPTIMIZED
 # Based on Volume Profile, Value Area, Point of Control, and Price Action
-# OPTIMIZED: Parameters tuned by Bayesian optimizer on {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+# OPTIMIZED: Parameters tuned by Bayesian optimizer on 2025-12-31 12:54:29
 #
 # To regenerate: python apply_config.py --from <results.json>
 
@@ -266,9 +12,9 @@ input valueAreaPercent = 70;
 input showValueArea = yes;
 input showPOC = yes;
 input showSignals = yes;
-input volumeThreshold = {p.get('volume_threshold', 1.3):.2f}; # OPTIMIZED
+input volumeThreshold = 1.30; # OPTIMIZED
 input enableAlerts = yes;
-input minConfirmationBars = {p.get('min_confirmation_bars', 2)}; # OPTIMIZED
+input minConfirmationBars = 4; # OPTIMIZED
 input useSessionVA = yes;
 
 # Credit Optimization Settings
@@ -289,7 +35,7 @@ input tradePriorDayLevels = yes;
 
 # Win Rate & EV Optimization Settings
 input useTrendFilter = no;
-input useTimeFilter = {ts_yn(p.get('use_time_filter', False))}; # OPTIMIZED
+input useTimeFilter = yes; # OPTIMIZED
 input rthOnlySignals = yes;
 input showStopLoss = no;
 input riskRewardRatio = 2.0;
@@ -301,9 +47,9 @@ input hideValueAreaCloud = yes;
 
 # Signal Sensitivity Settings - OPTIMIZED
 input useRelaxedVolume = yes;
-input sustainedBarsRequired = {p.get('sustained_bars_required', 3)}; # OPTIMIZED
+input sustainedBarsRequired = 5; # OPTIMIZED
 input showDebugLabels = no;
-input signalCooldownBars = {p.get('signal_cooldown_bars', 8)}; # OPTIMIZED
+input signalCooldownBars = 21; # OPTIMIZED
 
 # Exit Signal Settings
 input showExitSignals = yes;
@@ -313,7 +59,7 @@ input exitAlertSound = yes;
 input showSignalBubbles = no;
 
 # Daily Trade Lockout System
-input maxDailyTrades = {p.get('max_daily_trades', 3)}; # OPTIMIZED
+input maxDailyTrades = 5.0; # OPTIMIZED
 input enableLockout = yes;
 input showTradeCounter = yes;
 input lockoutWarningAt = 2;
@@ -321,7 +67,7 @@ input lockoutWarningAt = 2;
 # Opening Range Bias - OPTIMIZED
 input openingRangeMinutes = 30;
 input showOpeningRange = yes;
-input useORBiasFilter = {ts_yn(p.get('use_or_bias_filter', True))}; # OPTIMIZED
+input useORBiasFilter = yes; # OPTIMIZED
 input orBufferPoints = 1.0;
 
 # Put/Call Zone Display
@@ -329,14 +75,14 @@ input showPutCallZones = yes;
 
 # ==================== SIGNAL ENABLE TOGGLES - OPTIMIZED ====================
 # These control which signals are active
-input enableVALBounce = {ts_yn(p.get('enable_val_bounce', True))}; # OPTIMIZED
-input enableVAHRejection = {ts_yn(p.get('enable_vah_rejection', True))}; # OPTIMIZED
-input enablePOCReclaim = {ts_yn(p.get('enable_poc_reclaim', True))}; # OPTIMIZED
-input enablePOCBreakdown = {ts_yn(p.get('enable_poc_breakdown', True))}; # OPTIMIZED
-input enableBreakout = {ts_yn(p.get('enable_breakout', True))}; # OPTIMIZED
-input enableBreakdown = {ts_yn(p.get('enable_breakdown', True))}; # OPTIMIZED
-input enableSustainedBreakout = {ts_yn(p.get('enable_sustained_breakout', True))}; # OPTIMIZED
-input enableSustainedBreakdown = {ts_yn(p.get('enable_sustained_breakdown', True))}; # OPTIMIZED
+input enableVALBounce = yes; # OPTIMIZED
+input enableVAHRejection = yes; # OPTIMIZED
+input enablePOCReclaim = no; # OPTIMIZED
+input enablePOCBreakdown = no; # OPTIMIZED
+input enableBreakout = yes; # OPTIMIZED
+input enableBreakdown = no; # OPTIMIZED
+input enableSustainedBreakout = no; # OPTIMIZED
+input enableSustainedBreakdown = no; # OPTIMIZED
 
 # ==================== VALUE AREA CALCULATIONS ====================
 
@@ -809,136 +555,5 @@ AddChartBubble(showSignals and showSignalBubbles and pocBreakdownShort, high + (
 AddChartBubble(showSignals and showSignalBubbles and breakdownShort, high + (ATR(14) * 0.5), "BD", Color.RED, yes);
 AddChartBubble(showSignals and showSignalBubbles and sustainedBreakdownNew, high + (ATR(14) * 0.5), "SUS-BD", Color.RED, yes);
 
-AddChartBubble(showExitSignals and showSignalBubbles and exitLongSignal, high + (ATR(14) * 1.2), "EXIT\\nLONG", Color.ORANGE, yes);
-AddChartBubble(showExitSignals and showSignalBubbles and exitShortSignal, low - (ATR(14) * 1.2), "EXIT\\nSHORT", Color.ORANGE, no);
-'''
-    
-    return thinkscript
-
-
-def preview_changes(params: Dict[str, Any]):
-    """Preview the changes without writing files"""
-    
-    print("\n" + "=" * 70)
-    print("                    CONFIGURATION PREVIEW")
-    print("=" * 70)
-    
-    print("\n  Signal Parameters:")
-    print(f"    signal_cooldown_bars: {params.get('signal_cooldown_bars', 8)}")
-    print(f"    min_confirmation_bars: {params.get('min_confirmation_bars', 2)}")
-    print(f"    sustained_bars_required: {params.get('sustained_bars_required', 3)}")
-    print(f"    volume_threshold: {params.get('volume_threshold', 1.3):.3f}")
-    
-    print("\n  Filters:")
-    print(f"    use_or_bias_filter: {params.get('use_or_bias_filter', True)}")
-    print(f"    use_time_filter: {params.get('use_time_filter', False)}")
-    
-    print("\n  Signal Enables (LONG):")
-    print(f"    enable_val_bounce: {params.get('enable_val_bounce', True)}")
-    print(f"    enable_poc_reclaim: {params.get('enable_poc_reclaim', True)}")
-    print(f"    enable_breakout: {params.get('enable_breakout', True)}")
-    print(f"    enable_sustained_breakout: {params.get('enable_sustained_breakout', True)}")
-    
-    print("\n  Signal Enables (SHORT):")
-    print(f"    enable_vah_rejection: {params.get('enable_vah_rejection', True)}")
-    print(f"    enable_poc_breakdown: {params.get('enable_poc_breakdown', True)}")
-    print(f"    enable_breakdown: {params.get('enable_breakdown', True)}")
-    print(f"    enable_sustained_breakdown: {params.get('enable_sustained_breakdown', True)}")
-    
-    print("\n  Delta Targeting:")
-    print(f"    target_delta: {params.get('target_delta', 0.30):.2f}")
-    print(f"    afternoon_delta: {params.get('afternoon_delta', 0.40):.2f}")
-    print(f"    afternoon_hour: {params.get('afternoon_hour', 12)}")
-    
-    print("\n  Kelly Sizing:")
-    print(f"    kelly_fraction: {params.get('kelly_fraction', 0.0):.3f}")
-    print(f"    max_equity_risk: {params.get('max_equity_risk', 0.10):.3f}")
-    print(f"    max_kelly_pct_cap: {params.get('max_kelly_pct_cap', 0.35):.3f}")
-    print(f"    hard_max_contracts: {params.get('hard_max_contracts', 100)}")
-    print(f"    kelly_lookback: {params.get('kelly_lookback', 20)}")
-    
-    print("\n  Risk Management:")
-    print(f"    max_daily_trades: {params.get('max_daily_trades', 3)}")
-    print(f"    enable_stop_loss: {params.get('enable_stop_loss', False)}")
-    print(f"    stop_loss_percent: {params.get('stop_loss_percent', 50)}")
-    print(f"    enable_take_profit: {params.get('enable_take_profit', False)}")
-    print(f"    take_profit_percent: {params.get('take_profit_percent', 100)}")
-    print(f"    enable_trailing_stop: {params.get('enable_trailing_stop', False)}")
-    print(f"    trailing_stop_percent: {params.get('trailing_stop_percent', 25)}")
-    print(f"    trailing_stop_activation: {params.get('trailing_stop_activation', 50)}")
-    print(f"    min_hold_bars: {params.get('min_hold_bars', 0)}")
-    
-    print("\n" + "=" * 70)
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Apply optimized configuration")
-    parser.add_argument("--from", dest="from_file", required=True, help="JSON file with optimized params")
-    parser.add_argument("--preview", action="store_true", help="Preview only, don't write files")
-    parser.add_argument("--config-out", default="config.py", help="Output config.py path")
-    parser.add_argument("--thinkscript-out", default="AMT_Optimized.ts", help="Output ThinkScript path")
-    parser.add_argument("--backup", action="store_true", help="Backup existing files before overwriting")
-    
-    args = parser.parse_args()
-    
-    # Load params
-    if not os.path.exists(args.from_file):
-        print(f"ERROR: File not found: {args.from_file}")
-        sys.exit(1)
-    
-    print(f"\n📂 Loading params from: {args.from_file}")
-    params = load_params(args.from_file)
-    print(f"   Found {len(params)} parameters")
-    
-    # Preview
-    preview_changes(params)
-    
-    if args.preview:
-        print("\n  (Preview mode - no files written)")
-        return
-    
-    # Backup existing files
-    if args.backup:
-        for f in [args.config_out, args.thinkscript_out]:
-            if os.path.exists(f):
-                backup = f + f".backup.{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-                os.rename(f, backup)
-                print(f"\n  📦 Backed up {f} → {backup}")
-    
-    # Generate and write config.py
-    config_content = generate_config_py(params)
-    with open(args.config_out, "w") as f:
-        f.write(config_content)
-    print(f"\n  ✅ Written: {args.config_out}")
-    
-    # Generate and write ThinkScript
-    thinkscript_content = generate_thinkscript(params)
-    with open(args.thinkscript_out, "w") as f:
-        f.write(thinkscript_content)
-    print(f"  ✅ Written: {args.thinkscript_out}")
-    
-    print("\n" + "=" * 70)
-    print("  NEXT STEPS:")
-    print("=" * 70)
-    print(f"""
-  1. Review the generated files:
-     - {args.config_out} (Python bot config)
-     - {args.thinkscript_out} (ThinkOrSwim study)
-
-  2. To use the ThinkScript in ToS:
-     a. Open ThinkOrSwim
-     b. Go to Charts → Studies → Edit Studies
-     c. Create New Study or Edit existing
-     d. Paste contents of {args.thinkscript_out}
-     e. Save and apply to chart
-
-  3. Test the bot with new config:
-     python trading_bot.py --paper  # If you have paper trading
-     python trading_bot.py          # Live trading
-
-  4. Monitor for signal alignment between ToS and bot
-""")
-
-
-if __name__ == "__main__":
-    main()
+AddChartBubble(showExitSignals and showSignalBubbles and exitLongSignal, high + (ATR(14) * 1.2), "EXIT\nLONG", Color.ORANGE, yes);
+AddChartBubble(showExitSignals and showSignalBubbles and exitShortSignal, low - (ATR(14) * 1.2), "EXIT\nSHORT", Color.ORANGE, no);
