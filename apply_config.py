@@ -165,6 +165,14 @@ class SignalConfig:
     # Minimum move for credit
     min_es_point_move: float = 6.0
     
+    # VIX Regime Settings - OPTIMIZED
+    use_vix_regime: bool = {p.get('use_vix_regime', False)}  # OPTIMIZED
+    vix_high_threshold: int = {p.get('vix_high_threshold', 25)}  # OPTIMIZED
+    vix_low_threshold: int = {p.get('vix_low_threshold', 15)}  # OPTIMIZED
+    high_vol_cooldown_mult: float = {p.get('high_vol_cooldown_mult', 1.5):.2f}  # OPTIMIZED
+    low_vol_cooldown_mult: float = {p.get('low_vol_cooldown_mult', 0.8):.2f}  # OPTIMIZED
+    high_vol_delta_adj: float = {p.get('high_vol_delta_adj', 0.05):.3f}  # OPTIMIZED
+    
     # Signal enables - LONG signals - OPTIMIZED
     enable_val_bounce: bool = {p.get('enable_val_bounce', True)}  # OPTIMIZED
     enable_poc_reclaim: bool = {p.get('enable_poc_reclaim', True)}  # OPTIMIZED
@@ -303,7 +311,14 @@ input hideValueAreaCloud = yes;
 input useRelaxedVolume = yes;
 input sustainedBarsRequired = {p.get('sustained_bars_required', 3)}; # OPTIMIZED
 input showDebugLabels = no;
-input signalCooldownBars = {p.get('signal_cooldown_bars', 8)}; # OPTIMIZED
+input signalCooldownBars = {p.get('signal_cooldown_bars', 8)}; # OPTIMIZED (base cooldown)
+
+# VIX Regime Settings - OPTIMIZED
+input useVixRegime = {ts_yn(p.get('use_vix_regime', False))}; # OPTIMIZED
+input vixHighThreshold = {p.get('vix_high_threshold', 25)}; # OPTIMIZED - VIX above this = HIGH vol
+input vixLowThreshold = {p.get('vix_low_threshold', 15)}; # OPTIMIZED - VIX below this = LOW vol
+input highVolCooldownMult = {p.get('high_vol_cooldown_mult', 1.5):.2f}; # OPTIMIZED - multiply cooldown in high vol
+input lowVolCooldownMult = {p.get('low_vol_cooldown_mult', 0.8):.2f}; # OPTIMIZED - multiply cooldown in low vol
 
 # Exit Signal Settings
 input showExitSignals = yes;
@@ -506,10 +521,23 @@ def anyRawLong = valBounceRaw or pocReclaimRaw or breakoutRaw or sustainedBreako
 def anyRawShort = vahRejectionRaw or pocBreakdownRaw or breakdownRaw or sustainedBreakdownRaw;
 def anyRawSignal = anyRawLong or anyRawShort;
 
-rec barsSinceLastSignal = if barsSinceLastSignal[1] >= signalCooldownBars and anyRawSignal then 0 
+# VIX Regime Detection
+def vix = close("VIX");
+def vixRegime = if !useVixRegime then 0
+                else if vix >= vixHighThreshold then 1   # HIGH vol
+                else if vix <= vixLowThreshold then -1   # LOW vol  
+                else 0;                                  # NORMAL
+
+# Dynamic cooldown based on VIX regime
+def effectiveCooldown = if !useVixRegime then signalCooldownBars
+                        else if vixRegime == 1 then Round(signalCooldownBars * highVolCooldownMult, 0)
+                        else if vixRegime == -1 then Round(signalCooldownBars * lowVolCooldownMult, 0)
+                        else signalCooldownBars;
+
+rec barsSinceLastSignal = if barsSinceLastSignal[1] >= effectiveCooldown and anyRawSignal then 0 
                           else barsSinceLastSignal[1] + 1;
 
-def cooldownClear = barsSinceLastSignal[1] >= signalCooldownBars;
+def cooldownClear = barsSinceLastSignal[1] >= effectiveCooldown;
 
 # --- POSITION FILTER ---
 def allowLongSignals = close >= valueAreaLow;
@@ -715,9 +743,18 @@ AddLabel(yes, "POC: " + Round(pocValue, 2), Color.MAGENTA);
 AddLabel(yes, "VAL: " + Round(valueAreaLow, 2), Color.CYAN);
 
 AddLabel(showOpeningRange and !orComplete, "OR: Building...", Color.GRAY);
-AddLabel(showOpeningRange and orComplete and orBias == 1, "Bias: BULL ▲", Color.LIME);
-AddLabel(showOpeningRange and orComplete and orBias == -1, "Bias: BEAR ▼", Color.PINK);
+AddLabel(showOpeningRange and orComplete and orBias == 1, "Bias: BULL", Color.LIME);
+AddLabel(showOpeningRange and orComplete and orBias == -1, "Bias: BEAR", Color.PINK);
 AddLabel(showOpeningRange and orComplete and orBias == 0, "Bias: NEUTRAL", Color.GRAY);
+
+# VIX Regime Labels
+AddLabel(useVixRegime, "VIX: " + Round(vix, 1), 
+         if vixRegime == 1 then Color.RED 
+         else if vixRegime == -1 then Color.GREEN 
+         else Color.GRAY);
+AddLabel(useVixRegime and vixRegime == 1, "HIGH VOL (CD:" + effectiveCooldown + ")", Color.RED);
+AddLabel(useVixRegime and vixRegime == -1, "LOW VOL (CD:" + effectiveCooldown + ")", Color.GREEN);
+AddLabel(useVixRegime and vixRegime == 0, "NORMAL VOL", Color.GRAY);
 
 AddLabel(showPositionStatus and isLong, "LONG @ " + Round(positionEntryPrice, 2), Color.GREEN);
 AddLabel(showPositionStatus and isShort, "SHORT @ " + Round(positionEntryPrice, 2), Color.RED);

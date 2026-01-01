@@ -172,6 +172,17 @@ def run_backtest(params: Dict[str, Any]) -> TrialResult:
     afternoon_hour = int(params.get("afternoon_hour", 12))
     commission = 0.65
     max_daily_trades = int(params.get("max_daily_trades", 3))
+    
+    # VIX regime params
+    use_vix_regime = params.get("use_vix_regime", False)
+    vix_high_threshold = params.get("vix_high_threshold", 25)
+    vix_low_threshold = params.get("vix_low_threshold", 15)
+    high_vol_cooldown_mult = params.get("high_vol_cooldown_mult", 1.5)
+    low_vol_cooldown_mult = params.get("low_vol_cooldown_mult", 0.8)
+    high_vol_delta_adj = params.get("high_vol_delta_adj", 0.05)
+    
+    # Base cooldown (will be adjusted by VIX)
+    base_cooldown = params.get("signal_cooldown_bars", 8)
 
     # Guardrails (prevent runaway sizing)
     HARD_MAX_CONTRACTS = int(params.get("hard_max_contracts", 100))
@@ -186,7 +197,7 @@ def run_backtest(params: Dict[str, Any]) -> TrialResult:
             use_relaxed_volume=True,
             min_confirmation_bars=params.get("min_confirmation_bars", 2),
             sustained_bars_required=params.get("sustained_bars_required", 3),
-            signal_cooldown_bars=params.get("signal_cooldown_bars", 8),
+            signal_cooldown_bars=base_cooldown,  # Will be dynamically adjusted
             use_or_bias_filter=params.get("use_or_bias_filter", True),
             or_buffer_points=1.0,
             rth_only=True,
@@ -235,6 +246,9 @@ def run_backtest(params: Dict[str, Any]) -> TrialResult:
         rolling_window = int(params.get("kelly_lookback", 20))
         recent_wins: List[float] = []
         recent_losses: List[float] = []
+        
+        # Track current VIX regime
+        current_vix_regime = "NORMAL"  # LOW, NORMAL, HIGH
 
         for bar_data in bars:
             bar = Bar(
@@ -245,6 +259,9 @@ def run_backtest(params: Dict[str, Any]) -> TrialResult:
                 close=bar_data["close"],
                 volume=bar_data["volume"],
             )
+            
+            # Get VIX for this bar
+            current_vix = bar_data.get("vix", 18.0)
 
             bar_date = bar.timestamp.date()
 
@@ -252,6 +269,25 @@ def run_backtest(params: Dict[str, Any]) -> TrialResult:
                 current_date = bar_date
                 daily_trade_count = 0
                 daily_pnl.setdefault(bar_date, 0.0)
+                
+                # Update VIX regime at start of each day
+                if use_vix_regime:
+                    if current_vix >= vix_high_threshold:
+                        current_vix_regime = "HIGH"
+                    elif current_vix <= vix_low_threshold:
+                        current_vix_regime = "LOW"
+                    else:
+                        current_vix_regime = "NORMAL"
+                    
+                    # Dynamically adjust detector cooldown based on VIX regime
+                    if current_vix_regime == "HIGH":
+                        adjusted_cooldown = int(base_cooldown * high_vol_cooldown_mult)
+                    elif current_vix_regime == "LOW":
+                        adjusted_cooldown = int(base_cooldown * low_vol_cooldown_mult)
+                    else:
+                        adjusted_cooldown = base_cooldown
+                    
+                    detector.signal_cooldown_bars = max(3, adjusted_cooldown)
 
             # Update existing trade
             if current_trade:
@@ -351,7 +387,14 @@ def run_backtest(params: Dict[str, Any]) -> TrialResult:
                     trade_counter += 1
                     daily_trade_count += 1
 
+                    # Base delta selection by time of day
                     delta = afternoon_delta if bar.timestamp.hour >= afternoon_hour else target_delta
+                    
+                    # VIX regime adjustment to delta
+                    if use_vix_regime and current_vix_regime == "HIGH":
+                        # In high vol, use higher delta (more ITM) for protection
+                        delta = min(0.50, delta + high_vol_delta_adj)
+                    
                     option_entry = max(0.50, bar.close * (0.003 + (delta - 0.30) * 0.01))
                     option_cost = max(option_entry * 100.0, MIN_OPTION_COST)
 
@@ -480,7 +523,7 @@ def create_objective(min_trades: int = 30, phase: str = "all", locked_params: Op
         # Signal/filter params
         if phase in ("all", "signal"):
             params.update({
-                "signal_cooldown_bars": trial.suggest_int("signal_cooldown_bars", 5, 25),
+                "signal_cooldown_bars": trial.suggest_int("signal_cooldown_bars", 0, 25),
                 "min_confirmation_bars": trial.suggest_int("min_confirmation_bars", 1, 5),
                 "sustained_bars_required": trial.suggest_int("sustained_bars_required", 2, 6),
                 "volume_threshold": trial.suggest_float("volume_threshold", 1.0, 2.0),
@@ -495,6 +538,23 @@ def create_objective(min_trades: int = 30, phase: str = "all", locked_params: Op
                 "use_time_filter": trial.suggest_categorical("use_time_filter", [True, False]),
                 "use_or_bias_filter": trial.suggest_categorical("use_or_bias_filter", [True, False]),
             })
+            
+            # VIX regime params
+            use_vix_regime = trial.suggest_categorical("use_vix_regime", [True, False])
+            params["use_vix_regime"] = use_vix_regime
+            
+            if use_vix_regime:
+                params["vix_high_threshold"] = trial.suggest_int("vix_high_threshold", 20, 35)
+                params["vix_low_threshold"] = trial.suggest_int("vix_low_threshold", 12, 18)
+                params["high_vol_cooldown_mult"] = trial.suggest_float("high_vol_cooldown_mult", 1.0, 2.5)
+                params["low_vol_cooldown_mult"] = trial.suggest_float("low_vol_cooldown_mult", 0.5, 1.0)
+                params["high_vol_delta_adj"] = trial.suggest_float("high_vol_delta_adj", 0.0, 0.15)
+            else:
+                params["vix_high_threshold"] = 25
+                params["vix_low_threshold"] = 15
+                params["high_vol_cooldown_mult"] = 1.5
+                params["low_vol_cooldown_mult"] = 0.8
+                params["high_vol_delta_adj"] = 0.05
 
         # Risk/sizing params
         if phase in ("all", "risk"):
@@ -530,7 +590,7 @@ def create_objective(min_trades: int = 30, phase: str = "all", locked_params: Op
 
             # Kelly sizing
             params["kelly_fraction"] = trial.suggest_float("kelly_fraction", 0.0, 3.0)
-            params["max_equity_risk"] = trial.suggest_float("max_equity_risk", 0.05, 0.25)
+            params["max_equity_risk"] = trial.suggest_float("max_equity_risk", 0.05, 1.0)
             
             # Guardrails (narrower ranges)
             params["max_kelly_pct_cap"] = trial.suggest_float("max_kelly_pct_cap", 0.15, 0.40)
@@ -661,8 +721,54 @@ def fetch_historical_data(days: int = 90, start_date: str = None, end_date: str 
             unique_bars.append(bar)
 
     trading_dates = set(bar["datetime"].date() for bar in unique_bars)
-    print(f"  ✓ {len(unique_bars):,} bars across {len(trading_dates)} trading days\n")
+    print(f"  ✓ {len(unique_bars):,} SPY bars across {len(trading_dates)} trading days")
 
+    # Fetch VIX data for the same period
+    print("  Fetching VIX data for regime detection...")
+    vix_bars: Dict[str, float] = {}  # datetime_key -> VIX close
+    
+    try:
+        vix_chunk_end = end
+        for chunk_num in range(num_chunks):
+            vix_chunk_start = vix_chunk_end - timedelta(days=chunk_size_days)
+            if vix_chunk_start < start:
+                vix_chunk_start = start
+            if vix_chunk_end <= start:
+                break
+            
+            try:
+                vix_data = client.get_price_history(
+                    symbol="$VIX",  # Schwab VIX symbol
+                    period_type="day",
+                    period=10,
+                    frequency_type="minute",
+                    frequency=5,
+                    extended_hours=False,
+                    start_date=vix_chunk_start,
+                    end_date=vix_chunk_end,
+                )
+                if vix_data:
+                    for vb in vix_data:
+                        # Store VIX close by date (use daily close, not intraday)
+                        date_key = vb["datetime"].strftime("%Y-%m-%d")
+                        # Keep the latest value for each day
+                        vix_bars[date_key] = vb["close"]
+            except Exception:
+                pass  # VIX fetch is optional
+            
+            vix_chunk_end = vix_chunk_start
+            time_module.sleep(0.1)
+        
+        print(f"  ✓ VIX data for {len(vix_bars)} days")
+    except Exception as e:
+        print(f"  ⚠ VIX fetch failed (will use default): {e}")
+    
+    # Attach VIX to each SPY bar
+    for bar in unique_bars:
+        date_key = bar["datetime"].strftime("%Y-%m-%d")
+        bar["vix"] = vix_bars.get(date_key, 18.0)  # Default VIX = 18 if missing
+    
+    print()
     return unique_bars
 
 
