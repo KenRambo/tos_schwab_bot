@@ -338,6 +338,8 @@ def main():
     parser = argparse.ArgumentParser(description="Multi-Run Optimizer with Confidence Analysis")
     parser.add_argument("--runs", type=int, default=5, help="Number of optimization runs")
     parser.add_argument("--days", type=int, default=90, help="Days of historical data")
+    parser.add_argument("--start-date", type=str, default=None, help="Start date YYYY-MM-DD (e.g., 2025-04-01)")
+    parser.add_argument("--end-date", type=str, default=None, help="End date YYYY-MM-DD (e.g., 2025-07-01)")
     parser.add_argument("--trials", type=int, default=500, help="Trials per run")
     parser.add_argument("--turbo", action="store_true", help="Use more parallel workers")
     parser.add_argument("--min-trades", type=int, default=30, help="Minimum trades for valid result")
@@ -361,7 +363,10 @@ def main():
     print("                    MULTI-RUN OPTIMIZER")
     print("=" * 80)
     print(f"\n  Runs: {args.runs}")
-    print(f"  Days: {args.days}")
+    if args.start_date and args.end_date:
+        print(f"  Date Range: {args.start_date} to {args.end_date}")
+    else:
+        print(f"  Days: {args.days}")
     print(f"  Trials per run: {args.trials}")
     print(f"  Phase: {args.phase}")
     print(f"  Seeds: {seeds}")
@@ -387,7 +392,11 @@ def main():
     cached_bars = None
     try:
         from optimizer_smart import fetch_historical_data
-        cached_bars = fetch_historical_data(days=args.days)
+        cached_bars = fetch_historical_data(
+            days=args.days,
+            start_date=args.start_date,
+            end_date=args.end_date
+        )
         print(f"  ✓ Cached {len(cached_bars):,} bars")
     except Exception as e:
         print(f"  ✗ Data fetch failed: {e}")

@@ -175,7 +175,7 @@ def run_backtest(params: Dict[str, Any]) -> TrialResult:
 
     # Guardrails (prevent runaway sizing)
     HARD_MAX_CONTRACTS = int(params.get("hard_max_contracts", 100))
-    MAX_KELLY_PCT_CAP = float(params.get("max_kelly_pct_cap", 1))
+    MAX_KELLY_PCT_CAP = float(params.get("max_kelly_pct_cap", 0.35))
     MIN_OPTION_COST = float(params.get("min_option_cost", 25.0))
 
     try:
@@ -480,7 +480,7 @@ def create_objective(min_trades: int = 30, phase: str = "all", locked_params: Op
         # Signal/filter params
         if phase in ("all", "signal"):
             params.update({
-                "signal_cooldown_bars": trial.suggest_int("signal_cooldown_bars", 0, 25),
+                "signal_cooldown_bars": trial.suggest_int("signal_cooldown_bars", 5, 25),
                 "min_confirmation_bars": trial.suggest_int("min_confirmation_bars", 1, 5),
                 "sustained_bars_required": trial.suggest_int("sustained_bars_required", 2, 6),
                 "volume_threshold": trial.suggest_float("volume_threshold", 1.0, 2.0),
@@ -530,7 +530,7 @@ def create_objective(min_trades: int = 30, phase: str = "all", locked_params: Op
 
             # Kelly sizing
             params["kelly_fraction"] = trial.suggest_float("kelly_fraction", 0.0, 3.0)
-            params["max_equity_risk"] = trial.suggest_float("max_equity_risk", 0.05, 0.3)
+            params["max_equity_risk"] = trial.suggest_float("max_equity_risk", 0.05, 0.25)
             
             # Guardrails (narrower ranges)
             params["max_kelly_pct_cap"] = trial.suggest_float("max_kelly_pct_cap", 0.15, 0.40)
@@ -554,7 +554,15 @@ def create_objective(min_trades: int = 30, phase: str = "all", locked_params: Op
 # -----------------------------
 # Data fetch
 # -----------------------------
-def fetch_historical_data(days: int = 90) -> List[Dict]:
+def fetch_historical_data(days: int = 90, start_date: str = None, end_date: str = None) -> List[Dict]:
+    """
+    Fetch historical data for backtesting.
+    
+    Args:
+        days: Number of trading days (used if start_date/end_date not provided)
+        start_date: Start date in YYYY-MM-DD format (e.g., "2025-04-01")
+        end_date: End date in YYYY-MM-DD format (e.g., "2025-07-01")
+    """
     from schwab_auth import SchwabAuth
     from schwab_client import SchwabClient
     from config import config
@@ -574,9 +582,16 @@ def fetch_historical_data(days: int = 90) -> List[Dict]:
 
     client = SchwabClient(auth)
 
-    calendar_days_needed = int(days * 1.5)
-    end = datetime.now()
-    start = end - timedelta(days=calendar_days_needed)
+    # Determine date range
+    if start_date and end_date:
+        start = datetime.strptime(start_date, "%Y-%m-%d")
+        end = datetime.strptime(end_date, "%Y-%m-%d")
+        calendar_days_needed = (end - start).days
+        print(f"\n  Date range: {start_date} to {end_date} ({calendar_days_needed} days)")
+    else:
+        calendar_days_needed = int(days * 1.5)
+        end = datetime.now()
+        start = end - timedelta(days=calendar_days_needed)
 
     all_bars: List[Dict[str, Any]] = []
     chunk_size_days = 7
