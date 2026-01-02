@@ -2,12 +2,26 @@
 
 A Python trading bot that replicates the signal logic from your ThinkOrSwim Auction Market Theory (AMT) indicator and automatically trades SPY options via the Schwab API.
 
+## 🎯 Latest Optimization Results (January 2026)
+
+**Variant A (Aggressive) - Best Single Run:**
+| Metric | Value |
+|--------|-------|
+| Win Rate | 72.6% |
+| Total P&L | $274,048 |
+| Trades | 62 |
+| Profit Factor | 3.25 |
+| Sharpe Ratio | 5.58 |
+| Max Drawdown | $32,715 |
+
+**Key Finding:** Enabling short signals (VAH rejection + breakdown) increased P&L by 2.5x compared to long-only strategy.
+
 ## Overview
 
 This bot monitors SPY price action, detects the same signals your ToS indicator generates, and automatically executes trades:
 
-- **LONG Signal** → Buy SPY CALL at target delta (default 30Δ)
-- **SHORT Signal** → Close any CALL position, Buy SPY PUT at target delta
+- **LONG Signal** → Buy SPY CALL at target delta (default 0.67Δ ATM)
+- **SHORT Signal** → Buy SPY PUT at target delta
 
 The bot implements your "hold until opposite signal" strategy - positions are held until an opposite direction signal fires.
 
@@ -16,40 +30,38 @@ The bot implements your "hold until opposite signal" strategy - positions are he
 ### Signal Detection (Matching Your ToS Indicator)
 
 **Long Signals:**
-- VAL Bounce - Price touches Value Area Low and bounces with volume
-- POC Reclaim - Price crosses above Point of Control with increasing volume
-- Breakout - Accepted above VAH for confirmation bars
-- Sustained Breakout - Extended time above VAH
-- Prior Day VAL Bounce / POC Reclaim
+- ✅ VAL Bounce - Price touches Value Area Low and bounces with volume
+- ❌ POC Reclaim - Disabled (noisy)
+- ❌ Breakout - Disabled by optimizer
+- ❌ Sustained Breakout - Disabled
 
 **Short Signals:**
-- VAH Rejection - Price touches Value Area High and rejects with volume
-- POC Breakdown - Price crosses below POC with increasing volume
-- Breakdown - Accepted below VAL for confirmation bars
-- Sustained Breakdown - Extended time below VAL
-- Prior Day VAH Rejection / POC Breakdown
+- ✅ VAH Rejection - Price touches Value Area High and rejects with volume
+- ❌ POC Breakdown - Disabled (noisy)
+- ✅ Breakdown - Accepted below VAL for confirmation bars
+- ❌ Sustained Breakdown - Disabled
 
 ### Filters (Matching Your ToS Settings)
 
 - **Opening Range Bias Filter** - Only takes signals aligned with first 30-minute direction
 - **RTH Only** - Signals only during regular trading hours (9:30 AM - 4:00 PM ET)
-- **Time Filter** (optional) - Avoids first 25 min, lunch hour, last 15 min
-- **Signal Cooldown** - 8 bars (40 min on 5-min chart) between signals
-- **Daily Trade Limit** - Maximum 3 trades per day (configurable)
+- **Signal Cooldown** - 17 bars (~85 min on 5-min chart) between signals
+- **Daily Trade Limit** - Maximum 6 trades per day
+- **VIX Regime** - Adjusts cooldown based on volatility (optional)
 
 ### Option Selection
 
-- **Delta Targeting** - Select options by delta (default: 30Δ) instead of just nearest OTM
-- **0DTE Support** - Automatically handles after-hours option selection for next trading day
+- **High Delta Targeting** - Select ATM options (0.67Δ morning, 0.83Δ afternoon)
+- **0DTE Support** - Automatically handles same-day expiration
 - Configurable DTE range (0-7 days)
 
 ### Position Sizing & Risk Management
 
-- **Fixed Fractional Sizing** - Size positions based on account balance (default: 2% risk per trade)
+- **Fixed Fractional Sizing** - Size positions based on account balance
+- **Trailing Stop** - 21% trail with 32% activation threshold
 - **Daily Loss Limit** - Stop trading if daily loss exceeds $500 or 5% of account
-- **Delta Exposure Check** - Prevents overexposure by limiting total delta across positions
-- **Max Position Size** - Hard cap on contracts (default: 10)
-- Optional stop loss, take profit, and trailing stop
+- **Delta Exposure Check** - Prevents overexposure by limiting total delta
+- **Max Position Size** - Hard cap on contracts (default: 99)
 
 ### Monitoring & Analytics
 
@@ -150,65 +162,70 @@ On first run, the bot will:
 
 ## Configuration
 
-Edit `config.py` to customize:
+Edit `config.py` to customize, or use the optimizer to generate optimized settings:
 
-### Trading Settings
+```bash
+# Apply optimized config from Variant A results
+python apply_config_simple.py --from recommended_config_variant_a.json
+```
+
+### Optimized Trading Settings (Variant A)
 
 ```python
 @dataclass
 class TradingConfig:
     symbol: str = "SPY"
-    contracts: int = 1              # Base contracts (overridden by fixed fractional)
-    max_daily_trades: int = 3
+    max_daily_trades: int = 6              # OPTIMIZED (was 3)
     
-    # Option Selection
+    # Option Selection - HIGH DELTA ATM
     use_delta_targeting: bool = True
-    target_delta: float = 0.30      # 30 delta
-    min_days_to_expiry: int = 0     # 0DTE allowed
-    max_days_to_expiry: int = 0     # 0 = 0DTE only
+    target_delta: float = 0.67             # OPTIMIZED - ATM calls/puts
+    afternoon_delta: float = 0.83          # OPTIMIZED - higher after noon
+    min_days_to_expiry: int = 0            # 0DTE
+    max_days_to_expiry: int = 0
     
     # Position Sizing
     use_fixed_fractional: bool = True
-    risk_percent_per_trade: float = 2.0   # Risk 2% per trade
-    max_position_size: int = 10           # Never exceed 10 contracts
-    min_position_size: int = 1
+    risk_percent_per_trade: float = 23.0   # OPTIMIZED (aggressive)
+    max_position_size: int = 99            # OPTIMIZED
     
-    # Daily Loss Limit
-    enable_daily_loss_limit: bool = True
-    max_daily_loss_dollars: float = 500.0
-    max_daily_loss_percent: float = 5.0
+    # Trailing Stop (always enabled)
+    enable_trailing_stop: bool = True
+    trailing_stop_percent: float = 21.0    # OPTIMIZED
+    trailing_stop_activation: float = 32.0 # OPTIMIZED
     
-    # Delta Exposure
-    enable_correlation_check: bool = True
-    max_delta_exposure: float = 100.0     # Max total delta
+    # Stop Loss / Take Profit
+    enable_stop_loss: bool = False         # OPTIMIZED - use trailing instead
+    enable_take_profit: bool = False
 ```
 
-### Signal Settings
+### Optimized Signal Settings
 
 ```python
 @dataclass
 class SignalConfig:
     length_period: int = 20
-    value_area_percent: float = 70.0
-    volume_threshold: float = 1.3
+    volume_threshold: float = 1.48         # OPTIMIZED (was 1.3)
     use_relaxed_volume: bool = True
     min_confirmation_bars: int = 2
-    sustained_bars_required: int = 3
-    signal_cooldown_bars: int = 8
+    sustained_bars_required: int = 5       # OPTIMIZED (was 3)
+    signal_cooldown_bars: int = 17         # OPTIMIZED (was 8) - ~85 min
     use_or_bias_filter: bool = True
-```
-
-### Analytics Settings
-
-```python
-@dataclass
-class AnalyticsConfig:
-    enable_daily_summary: bool = True
-    daily_summary_hour: int = 16          # 4 PM ET
-    daily_summary_minute: int = 15        # 4:15 PM ET
-    enable_weekly_report: bool = True
-    enable_drawdown_alerts: bool = True
-    drawdown_alert_threshold: float = 10.0  # Alert at 10% drawdown
+    
+    # Signal Enables - OPTIMIZED
+    enable_val_bounce: bool = True         # Long dips
+    enable_vah_rejection: bool = True      # Short rallies
+    enable_breakdown: bool = True          # Short breakdowns
+    enable_breakout: bool = False          # DISABLED by optimizer
+    enable_poc_reclaim: bool = False       # Disabled - noisy
+    enable_poc_breakdown: bool = False     # Disabled - noisy
+    
+    # VIX Regime
+    use_vix_regime: bool = True            # OPTIMIZED
+    vix_high_threshold: int = 25
+    vix_low_threshold: int = 15
+    high_vol_cooldown_mult: float = 1.43   # Longer cooldown in high VIX
+    low_vol_cooldown_mult: float = 0.88    # Shorter cooldown in low VIX
 ```
 
 ### Paper Trading vs Live Trading
@@ -224,7 +241,7 @@ The bot starts in **paper trading mode** by default. To switch to live:
 ```
 tos_schwab_bot/
 ├── trading_bot.py       # Main bot application
-├── config.py            # Configuration settings
+├── config.py            # Configuration settings (auto-generated)
 ├── signal_detector.py   # Signal detection logic
 ├── position_manager.py  # Position/trade management
 ├── schwab_auth.py       # OAuth2 authentication
@@ -233,17 +250,22 @@ tos_schwab_bot/
 ├── analytics.py         # Performance tracking & reporting
 │
 ├── # Optimization Tools
-├── optimizer.py         # Grid search optimizer
-├── optimizer_smart.py   # Bayesian optimizer (Optuna)
-├── optimizer_multirun.py # Multi-run statistical analysis
-├── apply_config.py      # Apply optimized params to config + ThinkScript
-├── backtest.py          # Backtesting module
+├── optimizer_simple.py      # Simplified optimizer (high delta focus)
+├── optimizer_variant_a.py   # Variant A - Force shorts enabled
+├── optimizer_variant_b.py   # Variant B - Force VIX regime
+├── optimizer_variant_d.py   # Variant D - Short cooldown
+├── optimizer_multirun_simple.py  # Multi-run statistical analysis
+├── run_all_variants.py      # Run all variants with shared data cache
+├── apply_config_simple.py   # Apply optimized params to config.py
+├── backtest.py              # Backtesting module
+│
+├── # Optimized Configs
+├── recommended_config_variant_a.json  # Best aggressive config ($274k)
+├── recommended_config_consensus.json  # Conservative consensus config
 │
 ├── # ThinkScript Studies
-├── AMT_Complete_V2.ts   # Full AMT study (mean reversion + trend)
-├── AMT_Complete.ts      # Previous version
-├── AMT_Experimental.ts  # Experimental signals
-├── AMT_TrendDay.ts      # Trend day detection
+├── AMT_V35_Optimized.ts     # Latest optimized study (use this)
+├── AMT_Complete_V2.ts       # Full AMT study (legacy)
 │
 ├── # Utilities
 ├── bot.sh               # Background process management
@@ -461,71 +483,51 @@ After optimization, apply the results to your config and ThinkScript:
 # Preview changes (no files written)
 python apply_config.py --from multirun_results/recommended_config.json --preview
 
-# Apply config (writes config.py + AMT_Optimized.ts)
-python apply_config.py --from multirun_results/recommended_config.json
-
-# With backup of existing files
-python apply_config.py --from best_params.json --backup
+# Apply config (writes config.py)
+python apply_config_simple.py --from recommended_config_variant_a.json
 ```
 
-This generates:
-- `config.py` - Updated Python bot configuration
-- `AMT_Optimized.ts` - Updated ThinkScript with matching signal parameters
+This generates `config.py` with optimized parameters. The ThinkScript (`AMT_V35_Optimized.ts`) is already pre-configured.
 
-### Running Long Optimizations
+### Variant Testing Results
 
-For long-running optimizations (overnight, closing laptop):
+| Variant | Win Rate | Total P&L | Trades | Description |
+|---------|----------|-----------|--------|-------------|
+| Baseline | 84.8% | $57,416 | 33 | Long-only, original params |
+| **A: Force Shorts** | **71.8%** | **$143,530** | **60** | **VAH rejection + breakdown enabled** |
+| B: Force VIX | 82.1% | $53,784 | 37 | VIX regime adjustment |
+| D: Short Cooldown | 71.7% | $43,703 | 65 | More frequent signals |
+
+**Key Finding:** Variant A (forcing shorts enabled) produced 2.5x more profit despite lower win rate. Lower win rate but bigger wins when right.
+
+### Running Your Own Optimization
 
 ```bash
-# Using nohup (simplest)
-nohup python optimizer_multirun.py --runs 10 --days 90 --trials 1000 --turbo > multirun.log 2>&1 &
-tail -f multirun.log
+# Quick test (500 trials, ~2 min)
+python optimizer_simple.py --days 90 --trials 500 --turbo
 
-# Using screen (recommended)
-screen -S optimizer
-caffeinate -i python optimizer_multirun.py --runs 10 --days 90 --trials 1000 --turbo
-# Press Ctrl+A, then D to detach
-# Later: screen -r optimizer
+# Full multi-run with statistical confidence (5 runs)
+python optimizer_multirun_simple.py --runs 5 --days 365 --trials 500 --turbo
 
-# To cancel
-pkill -f optimizer
+# Run all variants with shared data cache
+python run_all_variants.py --runs 5 --days 365 --trials 500 --turbo
 ```
 
-### Time Estimates (M1 Max with --turbo)
+### Recommended Configs
 
-| Mode | Combinations | Time |
-|------|--------------|------|
-| Grid --fast | 512 | ~20 sec |
-| Grid --risk | 2,880 | ~2 min |
-| Grid --full | 10,000 | ~5 min |
-| Smart (500 trials) | 500 | ~2 min |
-| Smart (1000 trials) | 1,000 | ~3 min |
-| Smart (2000 trials) | 2,000 | ~5 min |
-| Multirun (5x500) | 2,500 | ~10 min |
+**Aggressive (Variant A best run):**
+```bash
+python apply_config_simple.py --from recommended_config_variant_a.json
+```
+- $274k P&L, 72.6% WR, $32k max drawdown
+- Best for: Larger accounts, higher risk tolerance
 
-### Recommended Workflow
-
-1. **Initial exploration** - Smart optimizer with 500 trials
-   ```bash
-   python optimizer_smart.py --days 90 --trials 500 --turbo --save-best initial.json
-   ```
-
-2. **Build confidence** - Multi-run with 5-10 seeds
-   ```bash
-   python optimizer_multirun.py --runs 5 --days 90 --trials 500 --turbo
-   ```
-
-3. **Validate on different period** - Test on 120 days
-   ```bash
-   python optimizer_smart.py --days 120 --trials 1000 --turbo
-   ```
-
-4. **Apply results**
-   ```bash
-   python apply_config.py --from multirun_results/recommended_config.json --backup
-   ```
-
-5. **Update ThinkScript** - Copy `AMT_Optimized.ts` contents to ToS
+**Conservative (Consensus):**
+```bash
+python apply_config_simple.py --from recommended_config_consensus.json
+```
+- $143k avg P&L, 71-74% WR, $18k max drawdown  
+- Best for: Smaller accounts, lower risk tolerance
 
 ---
 
@@ -630,18 +632,21 @@ This is a simplification - real 0DTE options are affected by IV crush, theta dec
 
 The Python signal detection mirrors your ToS script logic:
 
-| ToS Parameter | Python Equivalent |
-|---------------|-------------------|
-| `lengthPeriod = 20` | `length_period = 20` |
-| `volumeThreshold = 1.3` | `volume_threshold = 1.3` |
-| `useRelaxedVolume = yes` | `use_relaxed_volume = True` |
-| `minConfirmationBars = 2` | `min_confirmation_bars = 2` |
-| `sustainedBarsRequired = 3` | `sustained_bars_required = 3` |
-| `signalCooldownBars = 8` | `signal_cooldown_bars = 8` |
-| `useORBiasFilter = yes` | `use_or_bias_filter = True` |
-| `orBufferPoints = 1.0` | `or_buffer_points = 1.0` |
-| `maxDailyTrades = 3` | `max_daily_trades = 3` |
-| `rthOnlySignals = yes` | `rth_only = True` |
+| ToS Parameter | Python Equivalent | Optimized Value |
+|---------------|-------------------|-----------------|
+| `volumeThreshold` | `volume_threshold` | **1.48** |
+| `minConfirmationBars` | `min_confirmation_bars` | 2 |
+| `sustainedBarsRequired` | `sustained_bars_required` | **5** |
+| `signalCooldownBars` | `signal_cooldown_bars` | **17** |
+| `useORBiasFilter` | `use_or_bias_filter` | True |
+| `maxDailyTrades` | `max_daily_trades` | **6** |
+| `enableVALBounce` | `enable_val_bounce` | True |
+| `enableVAHRejection` | `enable_vah_rejection` | **True** |
+| `enableBreakout` | `enable_breakout` | **False** |
+| `enableBreakdown` | `enable_breakdown` | True |
+| `useVixRegime` | `use_vix_regime` | **True** |
+| `vixHighThreshold` | `vix_high_threshold` | 25 |
+| `vixLowThreshold` | `vix_low_threshold` | 15 |
 
 ## Sample Log Output
 
