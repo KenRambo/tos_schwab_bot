@@ -1,0 +1,43 @@
+{
+  "source": "variant_a_seed_789_best_pnl",
+  "metrics": {
+    "win_rate": 72.58,
+    "total_pnl": 274048.37,
+    "total_trades": 62,
+    "profit_factor": 3.25,
+    "sharpe_ratio": 5.58,
+    "max_drawdown": 32715.08
+  },
+  "params": {
+    "signal_cooldown_bars": 17,
+    "min_confirmation_bars": 2,
+    "sustained_bars_required": 5,
+    "volume_threshold": 1.478,
+    "use_or_bias_filter": true,
+    "enable_val_bounce": true,
+    "enable_vah_rejection": true,
+    "enable_breakout": false,
+    "enable_breakdown": true,
+    "enable_poc_reclaim": false,
+    "enable_poc_breakdown": false,
+    "enable_sustained_breakout": false,
+    "enable_sustained_breakdown": false,
+    "use_vix_regime": true,
+    "vix_high_threshold": 25,
+    "vix_low_threshold": 15,
+    "high_vol_cooldown_mult": 1.43,
+    "low_vol_cooldown_mult": 0.88,
+    "target_delta": 0.67,
+    "afternoon_delta": 0.83,
+    "afternoon_hour": 12,
+    "max_daily_trades": 6,
+    "enable_trailing_stop": true,
+    "trailing_stop_percent": 21,
+    "trailing_stop_activation": 32,
+    "enable_stop_loss": false,
+    "stop_loss_percent": 65,
+    "kelly_fraction": 1.26,
+    "max_equity_risk": 0.23,
+    "hard_max_contracts": 99
+  }
+}

@@ -1,0 +1,570 @@
+{
+  "analysis": {
+    "metrics": {
+      "max_drawdown": {
+        "max": 171.69953067764618,
+        "mean": 109.94827957800953,
+        "median": 137.18896723013495,
+        "min": 42.99026378797316,
+        "std": 60.962553226944095
+      },
+      "profit_factor": {
+        "max": 422.7492416819972,
+        "mean": 243.16355146628123,
+        "median": 220.80752346057173,
+        "min": 86.8797672312187,
+        "std": 132.69868843220868
+      },
+      "sharpe_ratio": {
+        "max": 6.180058923178753,
+        "mean": 5.753266023135988,
+        "median": 5.9035983422538125,
+        "min": 5.196347874518364,
+        "std": 0.4436188476414421
+      },
+      "total_pnl": {
+        "max": 92360.23248587738,
+        "mean": 57416.201950356604,
+        "median": 69859.1726745578,
+        "min": 11838.29072007388,
+        "std": 30884.547839169143
+      },
+      "total_trades": {
+        "max": 37,
+        "mean": 33,
+        "median": 32,
+        "min": 31,
+        "std": 2.345207879911715
+      },
+      "win_rate": {
+        "max": 86.48648648648648,
+        "mean": 84.79118781538136,
+        "median": 84.375,
+        "min": 83.87096774193549,
+        "std": 1.0087802180318821
+      }
+    },
+    "num_runs": 5,
+    "overall_confidence": 0.8763736796824575,
+    "params": {
+      "afternoon_delta": {
+        "confidence": 0.9699159549986821,
+        "max": 0.6440387851314385,
+        "mean": 0.6222852640420026,
+        "median": 0.6183545572548048,
+        "min": 0.6040127420661798,
+        "recommended": 0.6183545572548048,
+        "std": 0.018720857887096626,
+        "type": "numeric"
+      },
+      "afternoon_hour": {
+        "confidence": 1.0,
+        "max": 12,
+        "mean": 12,
+        "median": 12,
+        "min": 12,
+        "recommended": 12,
+        "std": 0.0,
+        "type": "numeric"
+      },
+      "enable_breakdown": {
+        "confidence": 0.6,
+        "false_count": 2,
+        "recommended": true,
+        "true_count": 3,
+        "type": "boolean"
+      },
+      "enable_breakout": {
+        "confidence": 0.8,
+        "false_count": 1,
+        "recommended": true,
+        "true_count": 4,
+        "type": "boolean"
+      },
+      "enable_poc_breakdown": {
+        "confidence": 1.0,
+        "false_count": 5,
+        "recommended": false,
+        "true_count": 0,
+        "type": "boolean"
+      },
+      "enable_poc_reclaim": {
+        "confidence": 1.0,
+        "false_count": 5,
+        "recommended": false,
+        "true_count": 0,
+        "type": "boolean"
+      },
+      "enable_stop_loss": {
+        "confidence": 1.0,
+        "false_count": 5,
+        "recommended": false,
+        "true_count": 0,
+        "type": "boolean"
+      },
+      "enable_sustained_breakdown": {
+        "confidence": 1.0,
+        "false_count": 5,
+        "recommended": false,
+        "true_count": 0,
+        "type": "boolean"
+      },
+      "enable_sustained_breakout": {
+        "confidence": 1.0,
+        "false_count": 5,
+        "recommended": false,
+        "true_count": 0,
+        "type": "boolean"
+      },
+      "enable_trailing_stop": {
+        "confidence": 1.0,
+        "false_count": 0,
+        "recommended": true,
+        "true_count": 5,
+        "type": "boolean"
+      },
+      "enable_vah_rejection": {
+        "confidence": 1.0,
+        "false_count": 5,
+        "recommended": false,
+        "true_count": 0,
+        "type": "boolean"
+      },
+      "enable_val_bounce": {
+        "confidence": 1.0,
+        "false_count": 0,
+        "recommended": true,
+        "true_count": 5,
+        "type": "boolean"
+      },
+      "hard_max_contracts": {
+        "confidence": 0.6605240389220877,
+        "max": 80,
+        "mean": 61.6,
+        "median": 72,
+        "min": 31,
+        "recommended": 72,
+        "std": 20.911719202399404,
+        "type": "numeric"
+      },
+      "high_vol_cooldown_mult": {
+        "confidence": 0.860386781431352,
+        "max": 1.8965905794544635,
+        "mean": 1.5514464337774514,
+        "median": 1.5059672060266345,
+        "min": 1.3167097875137652,
+        "recommended": 1.5059672060266345,
+        "std": 0.21660243005652072,
+        "type": "numeric"
+      },
+      "kelly_fraction": {
+        "confidence": 0.5512884561399493,
+        "max": 1.4866656500440611,
+        "mean": 0.8917493375881499,
+        "median": 0.6732570091383216,
+        "min": 0.5213792350372436,
+        "recommended": 0.6732570091383216,
+        "std": 0.4001382220053563,
+        "type": "numeric"
+      },
+      "low_vol_cooldown_mult": {
+        "confidence": 0.9222408419829222,
+        "max": 0.8337392438985513,
+        "mean": 0.7477041801225721,
+        "median": 0.733586777009168,
+        "min": 0.676179273773058,
+        "recommended": 0.733586777009168,
+        "std": 0.05814084749218064,
+        "type": "numeric"
+      },
+      "max_daily_trades": {
+        "confidence": 0.8478548451374539,
+        "max": 4,
+        "mean": 3.6,
+        "median": 4,
+        "min": 3,
+        "recommended": 4,
+        "std": 0.5477225575051661,
+        "type": "numeric"
+      },
+      "max_equity_risk": {
+        "confidence": 0.730182926284525,
+        "max": 0.24996773935204336,
+        "mean": 0.18912154164826664,
+        "median": 0.18347526099573805,
+        "min": 0.12830239650055128,
+        "recommended": 0.18347526099573805,
+        "std": 0.051028220944094656,
+        "type": "numeric"
+      },
+      "min_confirmation_bars": {
+        "confidence": 1.0,
+        "max": 3,
+        "mean": 3,
+        "median": 3,
+        "min": 3,
+        "recommended": 3,
+        "std": 0.0,
+        "type": "numeric"
+      },
+      "signal_cooldown_bars": {
+        "confidence": 0.7865037284941757,
+        "max": 20,
+        "mean": 17.4,
+        "median": 18,
+        "min": 11,
+        "recommended": 18,
+        "std": 3.714835124201342,
+        "type": "numeric"
+      },
+      "stop_loss_percent": {
+        "confidence": 0.9504131068753073,
+        "max": 55,
+        "mean": 52.2,
+        "median": 53,
+        "min": 49,
+        "recommended": 53,
+        "std": 2.588435821108957,
+        "type": "numeric"
+      },
+      "sustained_bars_required": {
+        "confidence": 0.6464466094067263,
+        "max": 5,
+        "mean": 4,
+        "median": 5,
+        "min": 2,
+        "recommended": 5,
+        "std": 1.4142135623730951,
+        "type": "numeric"
+      },
+      "target_delta": {
+        "confidence": 0.9091387788598453,
+        "max": 0.7185822948973112,
+        "mean": 0.6249231917488225,
+        "median": 0.6073784516039847,
+        "min": 0.5767379742636879,
+        "recommended": 0.6073784516039847,
+        "std": 0.05678128432110108,
+        "type": "numeric"
+      },
+      "trailing_stop_activation": {
+        "confidence": 0.7777544634590006,
+        "max": 49,
+        "mean": 35.2,
+        "median": 33,
+        "min": 30,
+        "recommended": 33,
+        "std": 7.8230428862431785,
+        "type": "numeric"
+      },
+      "trailing_stop_percent": {
+        "confidence": 0.8564321396307921,
+        "max": 35,
+        "mean": 30.6,
+        "median": 31,
+        "min": 24,
+        "recommended": 31,
+        "std": 4.39317652729776,
+        "type": "numeric"
+      },
+      "use_or_bias_filter": {
+        "confidence": 0.8,
+        "false_count": 4,
+        "recommended": false,
+        "true_count": 1,
+        "type": "boolean"
+      },
+      "use_vix_regime": {
+        "confidence": 0.8,
+        "false_count": 4,
+        "recommended": false,
+        "true_count": 1,
+        "type": "boolean"
+      },
+      "vix_high_threshold": {
+        "confidence": 1.0,
+        "max": 25,
+        "mean": 25,
+        "median": 25,
+        "min": 25,
+        "recommended": 25,
+        "std": 0.0,
+        "type": "numeric"
+      },
+      "vix_low_threshold": {
+        "confidence": 1.0,
+        "max": 15,
+        "mean": 15,
+        "median": 15,
+        "min": 15,
+        "recommended": 15,
+        "std": 0.0,
+        "type": "numeric"
+      },
+      "volume_threshold": {
+        "confidence": 0.8221277188509043,
+        "max": 1.7516311126020523,
+        "mean": 1.4383444389452724,
+        "median": 1.530607577084363,
+        "min": 1.1242875475950234,
+        "recommended": 1.530607577084363,
+        "std": 0.25584160643331183,
+        "type": "numeric"
+      }
+    }
+  },
+  "recommended_config": {
+    "afternoon_delta": 0.618,
+    "afternoon_hour": 12,
+    "enable_breakdown": true,
+    "enable_breakout": true,
+    "enable_poc_breakdown": false,
+    "enable_poc_reclaim": false,
+    "enable_stop_loss": false,
+    "enable_sustained_breakdown": false,
+    "enable_sustained_breakout": false,
+    "enable_trailing_stop": true,
+    "enable_vah_rejection": false,
+    "enable_val_bounce": true,
+    "hard_max_contracts": 72,
+    "high_vol_cooldown_mult": 1.506,
+    "kelly_fraction": 0.673,
+    "low_vol_cooldown_mult": 0.734,
+    "max_daily_trades": 4,
+    "max_equity_risk": 0.183,
+    "min_confirmation_bars": 3,
+    "signal_cooldown_bars": 18,
+    "stop_loss_percent": 53,
+    "sustained_bars_required": 5,
+    "target_delta": 0.607,
+    "trailing_stop_activation": 33,
+    "trailing_stop_percent": 31,
+    "use_or_bias_filter": false,
+    "use_vix_regime": false,
+    "vix_high_threshold": 25,
+    "vix_low_threshold": 15,
+    "volume_threshold": 1.531
+  },
+  "runs": [
+    {
+      "metrics": {
+        "max_drawdown": 42.99026378797316,
+        "profit_factor": 86.8797672312187,
+        "score": 1.554634815079261,
+        "sharpe_ratio": 5.374328680355635,
+        "total_pnl": 11838.29072007388,
+        "total_trades": 32,
+        "win_rate": 84.375
+      },
+      "params": {
+        "afternoon_delta": 0.6183545572548048,
+        "afternoon_hour": 12,
+        "enable_breakdown": false,
+        "enable_breakout": true,
+        "enable_poc_breakdown": false,
+        "enable_poc_reclaim": false,
+        "enable_stop_loss": false,
+        "enable_sustained_breakdown": false,
+        "enable_sustained_breakout": false,
+        "enable_trailing_stop": true,
+        "enable_vah_rejection": false,
+        "enable_val_bounce": true,
+        "hard_max_contracts": 72,
+        "high_vol_cooldown_mult": 1.5870428446820677,
+        "kelly_fraction": 1.1140951245994772,
+        "low_vol_cooldown_mult": 0.7274552474861172,
+        "max_daily_trades": 4,
+        "max_equity_risk": 0.18347526099573805,
+        "min_confirmation_bars": 3,
+        "signal_cooldown_bars": 18,
+        "stop_loss_percent": 55,
+        "sustained_bars_required": 5,
+        "target_delta": 0.5874556647231449,
+        "trailing_stop_activation": 30,
+        "trailing_stop_percent": 34,
+        "use_or_bias_filter": false,
+        "use_vix_regime": false,
+        "vix_high_threshold": 25,
+        "vix_low_threshold": 15,
+        "volume_threshold": 1.554371702684191
+      },
+      "seed": 42
+    },
+    {
+      "metrics": {
+        "max_drawdown": 151.77229059283673,
+        "profit_factor": 220.80752346057173,
+        "score": 1.5410588181340141,
+        "sharpe_ratio": 6.111996295373376,
+        "total_pnl": 69937.86255982828,
+        "total_trades": 33,
+        "win_rate": 84.84848484848484
+      },
+      "params": {
+        "afternoon_delta": 0.6395281930729413,
+        "afternoon_hour": 12,
+        "enable_breakdown": true,
+        "enable_breakout": true,
+        "enable_poc_breakdown": false,
+        "enable_poc_reclaim": false,
+        "enable_stop_loss": false,
+        "enable_sustained_breakdown": false,
+        "enable_sustained_breakout": false,
+        "enable_trailing_stop": true,
+        "enable_vah_rejection": false,
+        "enable_val_bounce": true,
+        "hard_max_contracts": 80,
+        "high_vol_cooldown_mult": 1.450921751210326,
+        "kelly_fraction": 0.6732570091383216,
+        "low_vol_cooldown_mult": 0.676179273773058,
+        "max_daily_trades": 3,
+        "max_equity_risk": 0.24996773935204336,
+        "min_confirmation_bars": 3,
+        "signal_cooldown_bars": 20,
+        "stop_loss_percent": 54,
+        "sustained_bars_required": 5,
+        "target_delta": 0.7185822948973112,
+        "trailing_stop_activation": 31,
+        "trailing_stop_percent": 24,
+        "use_or_bias_filter": true,
+        "use_vix_regime": false,
+        "vix_high_threshold": 25,
+        "vix_low_threshold": 15,
+        "volume_threshold": 1.7516311126020523
+      },
+      "seed": 123
+    },
+    {
+      "metrics": {
+        "max_drawdown": 171.69953067764618,
+        "profit_factor": 161.26614757217607,
+        "score": 1.5385718985714298,
+        "sharpe_ratio": 6.180058923178753,
+        "total_pnl": 69859.1726745578,
+        "total_trades": 37,
+        "win_rate": 86.48648648648648
+      },
+      "params": {
+        "afternoon_delta": 0.6440387851314385,
+        "afternoon_hour": 12,
+        "enable_breakdown": true,
+        "enable_breakout": true,
+        "enable_poc_breakdown": false,
+        "enable_poc_reclaim": false,
+        "enable_stop_loss": false,
+        "enable_sustained_breakdown": false,
+        "enable_sustained_breakout": false,
+        "enable_trailing_stop": true,
+        "enable_vah_rejection": false,
+        "enable_val_bounce": true,
+        "hard_max_contracts": 49,
+        "high_vol_cooldown_mult": 1.3167097875137652,
+        "kelly_fraction": 0.5213792350372436,
+        "low_vol_cooldown_mult": 0.7675603584459662,
+        "max_daily_trades": 4,
+        "max_equity_risk": 0.15341738678222608,
+        "min_confirmation_bars": 3,
+        "signal_cooldown_bars": 11,
+        "stop_loss_percent": 50,
+        "sustained_bars_required": 2,
+        "target_delta": 0.6073784516039847,
+        "trailing_stop_activation": 49,
+        "trailing_stop_percent": 31,
+        "use_or_bias_filter": false,
+        "use_vix_regime": false,
+        "vix_high_threshold": 25,
+        "vix_low_threshold": 15,
+        "volume_threshold": 1.2308242547607329
+      },
+      "seed": 456
+    },
+    {
+      "metrics": {
+        "max_drawdown": 137.18896723013495,
+        "profit_factor": 422.7492416819972,
+        "score": 1.5428788168896792,
+        "sharpe_ratio": 5.196347874518364,
+        "total_pnl": 92360.23248587738,
+        "total_trades": 32,
+        "win_rate": 84.375
+      },
+      "params": {
+        "afternoon_delta": 0.6040127420661798,
+        "afternoon_hour": 12,
+        "enable_breakdown": true,
+        "enable_breakout": true,
+        "enable_poc_breakdown": false,
+        "enable_poc_reclaim": false,
+        "enable_stop_loss": false,
+        "enable_sustained_breakdown": false,
+        "enable_sustained_breakout": false,
+        "enable_trailing_stop": true,
+        "enable_vah_rejection": false,
+        "enable_val_bounce": true,
+        "hard_max_contracts": 31,
+        "high_vol_cooldown_mult": 1.8965905794544635,
+        "kelly_fraction": 1.4866656500440611,
+        "low_vol_cooldown_mult": 0.8337392438985513,
+        "max_daily_trades": 3,
+        "max_equity_risk": 0.12830239650055128,
+        "min_confirmation_bars": 3,
+        "signal_cooldown_bars": 18,
+        "stop_loss_percent": 49,
+        "sustained_bars_required": 5,
+        "target_delta": 0.5767379742636879,
+        "trailing_stop_activation": 33,
+        "trailing_stop_percent": 29,
+        "use_or_bias_filter": false,
+        "use_vix_regime": true,
+        "vix_high_threshold": 25,
+        "vix_low_threshold": 15,
+        "volume_threshold": 1.530607577084363
+      },
+      "seed": 789
+    },
+    {
+      "metrics": {
+        "max_drawdown": 46.09034560145665,
+        "profit_factor": 324.1150773854424,
+        "score": 1.5542479248689383,
+        "sharpe_ratio": 5.9035983422538125,
+        "total_pnl": 43085.451311445664,
+        "total_trades": 31,
+        "win_rate": 83.87096774193549
+      },
+      "params": {
+        "afternoon_delta": 0.6054920426846483,
+        "afternoon_hour": 12,
+        "enable_breakdown": false,
+        "enable_breakout": false,
+        "enable_poc_breakdown": false,
+        "enable_poc_reclaim": false,
+        "enable_stop_loss": false,
+        "enable_sustained_breakdown": false,
+        "enable_sustained_breakout": false,
+        "enable_trailing_stop": true,
+        "enable_vah_rejection": false,
+        "enable_val_bounce": true,
+        "hard_max_contracts": 76,
+        "high_vol_cooldown_mult": 1.5059672060266345,
+        "kelly_fraction": 0.6633496691216461,
+        "low_vol_cooldown_mult": 0.733586777009168,
+        "max_daily_trades": 4,
+        "max_equity_risk": 0.23044492461077448,
+        "min_confirmation_bars": 3,
+        "signal_cooldown_bars": 20,
+        "stop_loss_percent": 53,
+        "sustained_bars_required": 3,
+        "target_delta": 0.6344615732559835,
+        "trailing_stop_activation": 33,
+        "trailing_stop_percent": 35,
+        "use_or_bias_filter": false,
+        "use_vix_regime": false,
+        "vix_high_threshold": 25,
+        "vix_low_threshold": 15,
+        "volume_threshold": 1.1242875475950234
+      },
+      "seed": 1000
+    }
+  ]
+}

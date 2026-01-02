@@ -169,9 +169,41 @@ class SignalConfig:
     use_vix_regime: bool = {p.get('use_vix_regime', False)}  # OPTIMIZED
     vix_high_threshold: int = {p.get('vix_high_threshold', 25)}  # OPTIMIZED
     vix_low_threshold: int = {p.get('vix_low_threshold', 15)}  # OPTIMIZED
+    
+    # High Vol Adjustments - OPTIMIZED
     high_vol_cooldown_mult: float = {p.get('high_vol_cooldown_mult', 1.5):.2f}  # OPTIMIZED
-    low_vol_cooldown_mult: float = {p.get('low_vol_cooldown_mult', 0.8):.2f}  # OPTIMIZED
+    high_vol_confirmation_mult: float = {p.get('high_vol_confirmation_mult', 1.5):.2f}  # OPTIMIZED
+    high_vol_sustained_mult: float = {p.get('high_vol_sustained_mult', 1.5):.2f}  # OPTIMIZED
+    high_vol_volume_add: float = {p.get('high_vol_volume_add', 0.2):.2f}  # OPTIMIZED
     high_vol_delta_adj: float = {p.get('high_vol_delta_adj', 0.05):.3f}  # OPTIMIZED
+    high_vol_min_hold_mult: float = {p.get('high_vol_min_hold_mult', 1.5):.2f}  # OPTIMIZED
+    
+    # Low Vol Adjustments - OPTIMIZED
+    low_vol_cooldown_mult: float = {p.get('low_vol_cooldown_mult', 0.7):.2f}  # OPTIMIZED
+    low_vol_confirmation_mult: float = {p.get('low_vol_confirmation_mult', 0.8):.2f}  # OPTIMIZED
+    low_vol_sustained_mult: float = {p.get('low_vol_sustained_mult', 0.8):.2f}  # OPTIMIZED
+    low_vol_volume_add: float = {p.get('low_vol_volume_add', -0.1):.2f}  # OPTIMIZED
+    low_vol_delta_adj: float = {p.get('low_vol_delta_adj', -0.05):.3f}  # OPTIMIZED
+    
+    # VWAP Filter - OPTIMIZED (institutional anchor)
+    use_vwap_filter: bool = {p.get('use_vwap_filter', False)}  # OPTIMIZED
+    vwap_filter_mode: str = "{p.get('vwap_filter_mode', 'strict')}"  # OPTIMIZED - "strict" or "confirm"
+    
+    # NYSE TICK Filter - OPTIMIZED (breadth confirmation)
+    use_tick_filter: bool = {p.get('use_tick_filter', False)}  # OPTIMIZED
+    tick_extreme_threshold: int = {p.get('tick_extreme_threshold', 500)}  # OPTIMIZED
+    
+    # Time Window Settings - OPTIMIZED (market mechanics)
+    signal_start_minutes: int = {p.get('signal_start_minutes', 0)}  # OPTIMIZED - Minutes after 9:30 to start
+    signal_end_minutes: int = {p.get('signal_end_minutes', 0)}  # OPTIMIZED - Minutes before 16:00 to stop
+    
+    # ATR-Based Stops - OPTIMIZED
+    use_atr_stops: bool = {p.get('use_atr_stops', False)}  # OPTIMIZED
+    atr_stop_mult: float = {p.get('atr_stop_mult', 2.0):.2f}  # OPTIMIZED
+    atr_target_mult: float = {p.get('atr_target_mult', 3.0):.2f}  # OPTIMIZED
+    
+    # Min Premium Filter - OPTIMIZED (avoid illiquid strikes)
+    min_option_premium: float = {p.get('min_option_premium', 0.25):.2f}  # OPTIMIZED
     
     # Signal enables - LONG signals - OPTIMIZED
     enable_val_bounce: bool = {p.get('enable_val_bounce', True)}  # OPTIMIZED
@@ -303,13 +335,33 @@ input showStopLoss = no;
 input riskRewardRatio = 2.0;
 input tickSize = 0.25; 
 
+# Time Window Settings - OPTIMIZED (market mechanics)
+input signalStartMinutes = {p.get('signal_start_minutes', 0)}; # OPTIMIZED - Minutes after 9:30 to start
+input signalEndMinutes = {p.get('signal_end_minutes', 0)}; # OPTIMIZED - Minutes before 16:00 to stop
+
+# ATR-Based Stops - OPTIMIZED
+input useATRStops = {ts_yn(p.get('use_atr_stops', False))}; # OPTIMIZED
+input atrStopMult = {p.get('atr_stop_mult', 2.0):.2f}; # OPTIMIZED
+input atrTargetMult = {p.get('atr_target_mult', 3.0):.2f}; # OPTIMIZED
+
+# Min Premium Filter - OPTIMIZED
+input minOptionPremium = {p.get('min_option_premium', 0.25):.2f}; # OPTIMIZED - Skip illiquid strikes
+
+# VWAP Filter - OPTIMIZED (institutional anchor)
+input useVWAPFilter = {ts_yn(p.get('use_vwap_filter', False))}; # OPTIMIZED
+input vwapFilterMode = {{"strict", "confirm"}}[{0 if p.get('vwap_filter_mode', 'strict') == 'strict' else 1}]; # OPTIMIZED
+
+# NYSE TICK Filter - OPTIMIZED (breadth confirmation)
+input useTICKFilter = {ts_yn(p.get('use_tick_filter', False))}; # OPTIMIZED
+input tickExtremeThreshold = {p.get('tick_extreme_threshold', 500)}; # OPTIMIZED - Block signals against extreme TICK
+
 # Display Simplification
 input showOnlyActiveSignals = yes; 
 input hideValueAreaCloud = yes;
 
 # Signal Sensitivity Settings - OPTIMIZED
 input useRelaxedVolume = yes;
-input sustainedBarsRequired = {p.get('sustained_bars_required', 3)}; # OPTIMIZED
+input sustainedBarsRequired = {p.get('sustained_bars_required', 3)}; # OPTIMIZED (base value)
 input showDebugLabels = no;
 input signalCooldownBars = {p.get('signal_cooldown_bars', 8)}; # OPTIMIZED (base cooldown)
 
@@ -317,8 +369,18 @@ input signalCooldownBars = {p.get('signal_cooldown_bars', 8)}; # OPTIMIZED (base
 input useVixRegime = {ts_yn(p.get('use_vix_regime', False))}; # OPTIMIZED
 input vixHighThreshold = {p.get('vix_high_threshold', 25)}; # OPTIMIZED - VIX above this = HIGH vol
 input vixLowThreshold = {p.get('vix_low_threshold', 15)}; # OPTIMIZED - VIX below this = LOW vol
-input highVolCooldownMult = {p.get('high_vol_cooldown_mult', 1.5):.2f}; # OPTIMIZED - multiply cooldown in high vol
-input lowVolCooldownMult = {p.get('low_vol_cooldown_mult', 0.8):.2f}; # OPTIMIZED - multiply cooldown in low vol
+
+# High Vol Adjustments - OPTIMIZED
+input highVolCooldownMult = {p.get('high_vol_cooldown_mult', 1.5):.2f}; # OPTIMIZED
+input highVolConfirmationMult = {p.get('high_vol_confirmation_mult', 1.5):.2f}; # OPTIMIZED
+input highVolSustainedMult = {p.get('high_vol_sustained_mult', 1.5):.2f}; # OPTIMIZED
+input highVolVolumeAdd = {p.get('high_vol_volume_add', 0.2):.2f}; # OPTIMIZED
+
+# Low Vol Adjustments - OPTIMIZED
+input lowVolCooldownMult = {p.get('low_vol_cooldown_mult', 0.7):.2f}; # OPTIMIZED
+input lowVolConfirmationMult = {p.get('low_vol_confirmation_mult', 0.8):.2f}; # OPTIMIZED
+input lowVolSustainedMult = {p.get('low_vol_sustained_mult', 0.8):.2f}; # OPTIMIZED
+input lowVolVolumeAdd = {p.get('low_vol_volume_add', -0.1):.2f}; # OPTIMIZED
 
 # Exit Signal Settings
 input showExitSignals = yes;
@@ -471,8 +533,32 @@ def avoidLunch = timeNow >= 9000 and timeNow <= 12600;
 def avoidClose = marketClose < 900;
 def goodTradingTime = isRTH and !avoidLunch and !avoidClose;
 
+# Time Window Filter - OPTIMIZED (market mechanics)
+def minutesSinceOpen = timeNow / 60;  # Convert seconds to minutes
+def minutesUntilClose = marketClose / 60;
+def inTimeWindow = minutesSinceOpen >= signalStartMinutes and minutesUntilClose >= signalEndMinutes;
+
 def timeFilter = if useTimeFilter then goodTradingTime else yes;
 def rthFilter = if rthOnlySignals then isRTH else yes;
+def timeWindowFilter = if signalStartMinutes > 0 or signalEndMinutes > 0 then inTimeWindow else yes;
+
+# VWAP Filter - Institutional anchor
+def vwapValue = vwap;
+def priceAboveVWAP = close >= vwapValue;
+def priceBelowVWAP = close <= vwapValue;
+
+# VWAP allows based on mode
+def vwapAllowsLong = if !useVWAPFilter then yes
+                     else priceAboveVWAP;
+def vwapAllowsShort = if !useVWAPFilter then yes
+                      else priceBelowVWAP;
+
+# NYSE TICK Filter - Breadth confirmation
+def tickValue = close("$TICK");
+def tickAllowsLong = if !useTICKFilter then yes
+                     else tickValue > -tickExtremeThreshold;  # Don't long in extreme negative breadth
+def tickAllowsShort = if !useTICKFilter then yes
+                      else tickValue < tickExtremeThreshold;   # Don't short in extreme positive breadth
 
 # ==================== SIGNAL LOGIC - WITH ENABLE TOGGLES ====================
 
@@ -481,40 +567,40 @@ def rthFilter = if rthOnlySignals then isRTH else yes;
 # LONG RAW 1: VAL Bounce
 def valTouch = low <= valueAreaLow and close > valueAreaLow;
 def valBounce = valTouch and volCondition and close > open;
-def valBounceRaw = enableVALBounce and valBounce and !valBounce[1] and timeFilter and rthFilter;
+def valBounceRaw = enableVALBounce and valBounce and !valBounce[1] and timeFilter and rthFilter and timeWindowFilter;
 
 # LONG RAW 2: POC Reclaim
 def pocReclaim = priceBelowPOC[1] and priceAbovePOC and volIncreasing;
-def pocReclaimRaw = enablePOCReclaim and pocReclaim and !pocReclaim[1] and timeFilter and rthFilter;
+def pocReclaimRaw = enablePOCReclaim and pocReclaim and !pocReclaim[1] and timeFilter and rthFilter and timeWindowFilter;
 
 # LONG RAW 3: Breakout above VAH
 def breakoutBar = !prevAboveVAH and priceAboveVAH and volCondition;
 def barsAboveVAH = if priceAboveVAH then barsAboveVAH[1] + 1 else 0;
 def breakoutAcceptance = breakoutBar[minConfirmationBars] and barsAboveVAH >= minConfirmationBars;
-def breakoutRaw = enableBreakout and breakoutAcceptance and !breakoutAcceptance[1] and timeFilter and rthFilter;
+def breakoutRaw = enableBreakout and breakoutAcceptance and !breakoutAcceptance[1] and timeFilter and rthFilter and timeWindowFilter;
 
 # LONG RAW 4: Sustained breakout
 def sustainedAboveVAH = barsAboveVAH >= sustainedBarsRequired;
-def sustainedBreakoutRaw = enableSustainedBreakout and sustainedAboveVAH and !sustainedAboveVAH[1] and timeFilter and rthFilter;
+def sustainedBreakoutRaw = enableSustainedBreakout and sustainedAboveVAH and !sustainedAboveVAH[1] and timeFilter and rthFilter and timeWindowFilter;
 
 # SHORT RAW 1: VAH Rejection
 def vahTouch = high >= valueAreaHigh and close < valueAreaHigh;
 def vahRejection = vahTouch and volCondition and close < open;
-def vahRejectionRaw = enableVAHRejection and vahRejection and !vahRejection[1] and timeFilter and rthFilter;
+def vahRejectionRaw = enableVAHRejection and vahRejection and !vahRejection[1] and timeFilter and rthFilter and timeWindowFilter;
 
 # SHORT RAW 2: POC Breakdown
 def pocBreakdown = prevAbovePOC and priceBelowPOC and volIncreasing;
-def pocBreakdownRaw = enablePOCBreakdown and pocBreakdown and !pocBreakdown[1] and timeFilter and rthFilter;
+def pocBreakdownRaw = enablePOCBreakdown and pocBreakdown and !pocBreakdown[1] and timeFilter and rthFilter and timeWindowFilter;
 
 # SHORT RAW 3: Breakdown below VAL
 def breakdownBar = !prevBelowVAL and priceBelowVAL and volCondition;
 def barsBelowVAL = if priceBelowVAL then barsBelowVAL[1] + 1 else 0;
 def breakdownAcceptance = breakdownBar[minConfirmationBars] and barsBelowVAL >= minConfirmationBars;
-def breakdownRaw = enableBreakdown and breakdownAcceptance and !breakdownAcceptance[1] and timeFilter and rthFilter;
+def breakdownRaw = enableBreakdown and breakdownAcceptance and !breakdownAcceptance[1] and timeFilter and rthFilter and timeWindowFilter;
 
 # SHORT RAW 4: Sustained breakdown
 def sustainedBelowVAL = barsBelowVAL >= sustainedBarsRequired;
-def sustainedBreakdownRaw = enableSustainedBreakdown and sustainedBelowVAL and !sustainedBelowVAL[1] and timeFilter and rthFilter;
+def sustainedBreakdownRaw = enableSustainedBreakdown and sustainedBelowVAL and !sustainedBelowVAL[1] and timeFilter and rthFilter and timeWindowFilter;
 
 # --- COOLDOWN LOGIC ---
 def anyRawLong = valBounceRaw or pocReclaimRaw or breakoutRaw or sustainedBreakoutRaw;
@@ -528,11 +614,61 @@ def vixRegime = if !useVixRegime then 0
                 else if vix <= vixLowThreshold then -1   # LOW vol  
                 else 0;                                  # NORMAL
 
-# Dynamic cooldown based on VIX regime
+# Dynamic parameters based on VIX regime
+# Cooldown
 def effectiveCooldown = if !useVixRegime then signalCooldownBars
                         else if vixRegime == 1 then Round(signalCooldownBars * highVolCooldownMult, 0)
-                        else if vixRegime == -1 then Round(signalCooldownBars * lowVolCooldownMult, 0)
+                        else if vixRegime == -1 then Max(3, Round(signalCooldownBars * lowVolCooldownMult, 0))
                         else signalCooldownBars;
+
+# Confirmation bars (for breakout/breakdown acceptance)
+def effectiveConfirmation = if !useVixRegime then minConfirmationBars
+                            else if vixRegime == 1 then Round(minConfirmationBars * highVolConfirmationMult, 0)
+                            else if vixRegime == -1 then Max(1, Round(minConfirmationBars * lowVolConfirmationMult, 0))
+                            else minConfirmationBars;
+
+# Sustained bars
+def effectiveSustained = if !useVixRegime then sustainedBarsRequired
+                         else if vixRegime == 1 then Round(sustainedBarsRequired * highVolSustainedMult, 0)
+                         else if vixRegime == -1 then Max(1, Round(sustainedBarsRequired * lowVolSustainedMult, 0))
+                         else sustainedBarsRequired;
+
+# Volume threshold
+def effectiveVolume = if !useVixRegime then volumeThreshold
+                      else if vixRegime == 1 then volumeThreshold + highVolVolumeAdd
+                      else if vixRegime == -1 then Max(1.0, volumeThreshold + lowVolVolumeAdd)
+                      else volumeThreshold;
+
+# --- VIX-ADJUSTED SIGNAL CHECKS ---
+# Override the raw signals with VIX-adjusted versions
+# These re-check the bar counts against effective thresholds
+
+# Breakout: needs effectiveConfirmation bars above VAH
+def breakoutAcceptanceVix = breakoutBar[effectiveConfirmation] and barsAboveVAH >= effectiveConfirmation;
+def breakoutRawVix = enableBreakout and breakoutAcceptanceVix and !breakoutAcceptanceVix[1] and timeFilter and rthFilter;
+
+# Sustained breakout: needs effectiveSustained bars above VAH  
+def sustainedAboveVAHVix = barsAboveVAH >= effectiveSustained;
+def sustainedBreakoutRawVix = enableSustainedBreakout and sustainedAboveVAHVix and !sustainedAboveVAHVix[1] and timeFilter and rthFilter;
+
+# Breakdown: needs effectiveConfirmation bars below VAL
+def breakdownAcceptanceVix = breakdownBar[effectiveConfirmation] and barsBelowVAL >= effectiveConfirmation;
+def breakdownRawVix = enableBreakdown and breakdownAcceptanceVix and !breakdownAcceptanceVix[1] and timeFilter and rthFilter;
+
+# Sustained breakdown: needs effectiveSustained bars below VAL
+def sustainedBelowVALVix = barsBelowVAL >= effectiveSustained;
+def sustainedBreakdownRawVix = enableSustainedBreakdown and sustainedBelowVALVix and !sustainedBelowVALVix[1] and timeFilter and rthFilter;
+
+# Volume condition with VIX adjustment
+def volConditionVix = if useRelaxedVolume 
+                      then (volRatio > effectiveVolume * 0.8) or (close > open and volRatio > effectiveVolume * 0.5)
+                      else volRatio > effectiveVolume;
+
+# Use VIX-adjusted signals when VIX regime is enabled
+def breakoutFinal = if useVixRegime then breakoutRawVix else breakoutRaw;
+def sustainedBreakoutFinal = if useVixRegime then sustainedBreakoutRawVix else sustainedBreakoutRaw;
+def breakdownFinal = if useVixRegime then breakdownRawVix else breakdownRaw;
+def sustainedBreakdownFinal = if useVixRegime then sustainedBreakdownRawVix else sustainedBreakdownRaw;
 
 rec barsSinceLastSignal = if barsSinceLastSignal[1] >= effectiveCooldown and anyRawSignal then 0 
                           else barsSinceLastSignal[1] + 1;
@@ -557,15 +693,17 @@ def orAllowShort = if !useORBiasFilter then yes
                    else no;
 
 # --- FINAL SIGNALS ---
-def valBounceLong = valBounceRaw and cooldownClear and allowLongSignals and orAllowLong;
-def pocReclaimLong = pocReclaimRaw and cooldownClear and allowLongSignals and orAllowLong;
-def breakoutLong = breakoutRaw and cooldownClear and allowLongSignals and orAllowLong;
-def sustainedBreakoutNew = sustainedBreakoutRaw and cooldownClear and allowLongSignals and orAllowLong;
+# Use VIX-adjusted signals for breakout/breakdown when VIX regime is enabled
+# Include VWAP and TICK filters for institutional alignment and breadth confirmation
+def valBounceLong = valBounceRaw and cooldownClear and allowLongSignals and orAllowLong and vwapAllowsLong and tickAllowsLong;
+def pocReclaimLong = pocReclaimRaw and cooldownClear and allowLongSignals and orAllowLong and vwapAllowsLong and tickAllowsLong;
+def breakoutLong = breakoutFinal and cooldownClear and allowLongSignals and orAllowLong and vwapAllowsLong and tickAllowsLong;
+def sustainedBreakoutNew = sustainedBreakoutFinal and cooldownClear and allowLongSignals and orAllowLong and vwapAllowsLong and tickAllowsLong;
 
-def vahRejectionShort = vahRejectionRaw and cooldownClear and allowShortSignals and orAllowShort;
-def pocBreakdownShort = pocBreakdownRaw and cooldownClear and allowShortSignals and orAllowShort;
-def breakdownShort = breakdownRaw and cooldownClear and allowShortSignals and orAllowShort;
-def sustainedBreakdownNew = sustainedBreakdownRaw and cooldownClear and allowShortSignals and orAllowShort;
+def vahRejectionShort = vahRejectionRaw and cooldownClear and allowShortSignals and orAllowShort and vwapAllowsShort and tickAllowsShort;
+def pocBreakdownShort = pocBreakdownRaw and cooldownClear and allowShortSignals and orAllowShort and vwapAllowsShort and tickAllowsShort;
+def breakdownShort = breakdownFinal and cooldownClear and allowShortSignals and orAllowShort and vwapAllowsShort and tickAllowsShort;
+def sustainedBreakdownNew = sustainedBreakdownFinal and cooldownClear and allowShortSignals and orAllowShort and vwapAllowsShort and tickAllowsShort;
 
 # ==================== PRIOR DAY VA SIGNALS ====================
 
@@ -587,11 +725,15 @@ def priorPocBreakdown = hasPriorDay and prevAbovePriorPOC and priceBelowPriorPOC
 def priorPocBreakdownRaw = tradePriorDayLevels and enablePOCBreakdown and priorPocBreakdown and !priorPocBreakdown[1] and timeFilter and rthFilter;
 def priorPocBreakdownShort = priorPocBreakdownRaw and cooldownClear and allowShortSignals and orAllowShort;
 
-# Combined signals
-def longSignal = valBounceLong or pocReclaimLong or breakoutLong or sustainedBreakoutNew or
+# Combined signals (with time window filter)
+def longSignalRaw = valBounceLong or pocReclaimLong or breakoutLong or sustainedBreakoutNew or
                  priorValBounceLong or priorPocReclaimLong;
-def shortSignal = vahRejectionShort or pocBreakdownShort or breakdownShort or sustainedBreakdownNew or
+def shortSignalRaw = vahRejectionShort or pocBreakdownShort or breakdownShort or sustainedBreakdownNew or
                   priorVahRejectionShort or priorPocBreakdownShort;
+
+# Apply time window filter to final signals
+def longSignal = longSignalRaw and timeWindowFilter;
+def shortSignal = shortSignalRaw and timeWindowFilter;
 
 # ==================== POSITION TRACKING ====================
 
@@ -709,6 +851,12 @@ ORMidline.SetDefaultColor(Color.GRAY);
 ORMidline.SetLineWeight(1);
 ORMidline.SetStyle(Curve.SHORT_DASH);
 
+# VWAP Plot (when filter enabled)
+plot VWAPLine = if useVWAPFilter then vwapValue else Double.NaN;
+VWAPLine.SetDefaultColor(Color.YELLOW);
+VWAPLine.SetLineWeight(2);
+VWAPLine.SetStyle(Curve.FIRM);
+
 # Signal Arrows
 plot LongArrow = if showSignals and longSignal and !isLockedOut then low - (ATR(14) * 0.5) else Double.NaN;
 LongArrow.SetPaintingStrategy(PaintingStrategy.BOOLEAN_ARROW_UP);
@@ -747,14 +895,20 @@ AddLabel(showOpeningRange and orComplete and orBias == 1, "Bias: BULL", Color.LI
 AddLabel(showOpeningRange and orComplete and orBias == -1, "Bias: BEAR", Color.PINK);
 AddLabel(showOpeningRange and orComplete and orBias == 0, "Bias: NEUTRAL", Color.GRAY);
 
-# VIX Regime Labels
+# VIX Regime Labels - shows all adjusted parameters
 AddLabel(useVixRegime, "VIX: " + Round(vix, 1), 
          if vixRegime == 1 then Color.RED 
          else if vixRegime == -1 then Color.GREEN 
          else Color.GRAY);
-AddLabel(useVixRegime and vixRegime == 1, "HIGH VOL (CD:" + effectiveCooldown + ")", Color.RED);
-AddLabel(useVixRegime and vixRegime == -1, "LOW VOL (CD:" + effectiveCooldown + ")", Color.GREEN);
-AddLabel(useVixRegime and vixRegime == 0, "NORMAL VOL", Color.GRAY);
+AddLabel(useVixRegime and vixRegime == 1, 
+         "HIGH VOL | CD:" + effectiveCooldown + " Conf:" + effectiveConfirmation + " Sust:" + effectiveSustained, 
+         Color.RED);
+AddLabel(useVixRegime and vixRegime == -1, 
+         "LOW VOL | CD:" + effectiveCooldown + " Conf:" + effectiveConfirmation + " Sust:" + effectiveSustained, 
+         Color.GREEN);
+AddLabel(useVixRegime and vixRegime == 0, 
+         "NORMAL | CD:" + effectiveCooldown + " Conf:" + effectiveConfirmation + " Sust:" + effectiveSustained, 
+         Color.GRAY);
 
 AddLabel(showPositionStatus and isLong, "LONG @ " + Round(positionEntryPrice, 2), Color.GREEN);
 AddLabel(showPositionStatus and isShort, "SHORT @ " + Round(positionEntryPrice, 2), Color.RED);
@@ -767,6 +921,30 @@ AddLabel(showTradeCounter and !isLockedOut,
 AddLabel(isWarning, "⚠️ LAST TRADE", Color.YELLOW);
 AddLabel(isLockedOut, "🛑 LOCKED OUT - STOP TRADING", Color.RED);
 AddLabel(rthOnlySignals and !isRTH and !isLockedOut, "OUTSIDE RTH", Color.GRAY);
+
+# Time Window Labels
+AddLabel(signalStartMinutes > 0 and minutesSinceOpen < signalStartMinutes, 
+         "WAITING " + (signalStartMinutes - minutesSinceOpen) + "min", Color.YELLOW);
+AddLabel(signalEndMinutes > 0 and minutesUntilClose < signalEndMinutes, 
+         "NO SIGNALS - EOD", Color.GRAY);
+
+# ATR Label (for ATR-based stops)
+def atr14 = ATR(14);
+AddLabel(useATRStops, "ATR: " + Round(atr14, 2) + " | Stop: " + Round(atr14 * atrStopMult, 2) + " | Tgt: " + Round(atr14 * atrTargetMult, 2), Color.CYAN);
+
+# VWAP Filter Labels
+AddLabel(useVWAPFilter, "VWAP: " + Round(vwapValue, 2), 
+         if priceAboveVWAP then Color.GREEN else Color.RED);
+AddLabel(useVWAPFilter and !vwapAllowsLong, "⛔ VWAP: No Longs", Color.RED);
+AddLabel(useVWAPFilter and !vwapAllowsShort, "⛔ VWAP: No Shorts", Color.GREEN);
+
+# TICK Filter Labels
+AddLabel(useTICKFilter, "TICK: " + Round(tickValue, 0), 
+         if tickValue > 500 then Color.GREEN 
+         else if tickValue < -500 then Color.RED 
+         else Color.GRAY);
+AddLabel(useTICKFilter and !tickAllowsLong, "⛔ TICK: No Longs (extreme -)", Color.RED);
+AddLabel(useTICKFilter and !tickAllowsShort, "⛔ TICK: No Shorts (extreme +)", Color.GREEN);
 
 AddLabel(longSignal and !wasShort and !isLockedOut, "🔔 LONG SIGNAL", Color.GREEN);
 AddLabel(shortSignal and !wasLong and !isLockedOut, "🔔 SHORT SIGNAL", Color.RED);

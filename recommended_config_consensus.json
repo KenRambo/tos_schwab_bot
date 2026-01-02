@@ -1,0 +1,42 @@
+{
+  "source": "variant_a_consensus_median",
+  "notes": "Median values across 5 Variant A runs - more robust than single best",
+  "expected_metrics": {
+    "win_rate": "71-74%",
+    "total_pnl": "$87k-$143k",
+    "total_trades": "50-68",
+    "profit_factor": "2.9-3.2"
+  },
+  "params": {
+    "signal_cooldown_bars": 15,
+    "min_confirmation_bars": 3,
+    "sustained_bars_required": 4,
+    "volume_threshold": 1.35,
+    "use_or_bias_filter": true,
+    "enable_val_bounce": true,
+    "enable_vah_rejection": true,
+    "enable_breakout": false,
+    "enable_breakdown": true,
+    "enable_poc_reclaim": false,
+    "enable_poc_breakdown": false,
+    "enable_sustained_breakout": false,
+    "enable_sustained_breakdown": false,
+    "use_vix_regime": true,
+    "vix_high_threshold": 25,
+    "vix_low_threshold": 15,
+    "high_vol_cooldown_mult": 1.70,
+    "low_vol_cooldown_mult": 0.60,
+    "target_delta": 0.67,
+    "afternoon_delta": 0.71,
+    "afternoon_hour": 12,
+    "max_daily_trades": 5,
+    "enable_trailing_stop": true,
+    "trailing_stop_percent": 24,
+    "trailing_stop_activation": 36,
+    "enable_stop_loss": false,
+    "stop_loss_percent": 60,
+    "kelly_fraction": 0.80,
+    "max_equity_risk": 0.20,
+    "hard_max_contracts": 57
+  }
+}
