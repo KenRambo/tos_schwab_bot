@@ -356,8 +356,10 @@ class TradingBot:
             
             # Set last processed bar time to the last historical bar
             # This prevents re-processing the same bar
-            self._last_processed_bar_time = bars_to_process[-1]['datetime']
-            logger.info(f"Last historical bar: {self._last_processed_bar_time.strftime('%Y-%m-%d %H:%M ET')}")
+            # Normalize to naive datetime for consistent comparison
+            last_bar_ts = bars_to_process[-1]['datetime']
+            self._last_processed_bar_time = last_bar_ts.replace(tzinfo=None) if last_bar_ts.tzinfo else last_bar_ts
+            logger.info(f"Last historical bar: {self._last_processed_bar_time.strftime('%Y-%m-%d %H:%M:%S')}")
             logger.info("Will only process bars AFTER this timestamp")
             logger.info("")
             
@@ -497,16 +499,20 @@ class TradingBot:
     def _is_new_bar(self, bar: Bar) -> bool:
         """Check if this bar is different from the last processed bar"""
         if self._last_processed_bar_time is None:
-            logger.debug(f"First bar - timestamp: {bar.timestamp}")
+            logger.info(f"First bar - timestamp: {bar.timestamp}")
             return True
         
+        # Normalize both timestamps to naive (remove timezone info for comparison)
+        bar_ts = bar.timestamp.replace(tzinfo=None) if bar.timestamp.tzinfo else bar.timestamp
+        last_ts = self._last_processed_bar_time.replace(tzinfo=None) if self._last_processed_bar_time.tzinfo else self._last_processed_bar_time
+        
         # Compare bar timestamps - only process if it's a new bar
-        is_new = bar.timestamp > self._last_processed_bar_time
+        is_new = bar_ts > last_ts
         
         if not is_new:
-            logger.debug(f"Same bar as before ({bar.timestamp}) - skipping")
+            logger.debug(f"Same bar as before ({bar_ts}) - skipping")
         else:
-            logger.debug(f"New bar: {bar.timestamp} > {self._last_processed_bar_time}")
+            logger.info(f"New bar detected: {bar_ts} > {last_ts}")
         
         return is_new
     
@@ -775,6 +781,10 @@ class TradingBot:
                     bar = self.get_current_bar()
                     
                     if bar:
+                        # Log the bar we fetched for debugging
+                        bar_ts_naive = bar.timestamp.replace(tzinfo=None) if bar.timestamp.tzinfo else bar.timestamp
+                        logger.debug(f"Fetched bar with timestamp: {bar_ts_naive}")
+                        
                         if self._is_new_bar(bar):
                             # This is a genuinely new completed bar
                             # Skip signal check if we already fired intra-bar
