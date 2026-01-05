@@ -436,6 +436,8 @@ class SignalDetector:
                     logger.info(f"OR proxy from VA: High={self.or_high:.2f}, Low={self.or_low:.2f}")
         
         # Update OR bias if complete and valid
+        # Must match ToS logic: only BULLISH if clearly above OR+buffer, BEARISH if below OR-buffer
+        # Everything else (including between OR high and OR high+buffer) is NEUTRAL
         if self.or_complete and self.or_high > 0 and self.or_low < float('inf'):
             if bar.close > self.or_high + self.or_buffer_points:
                 self.or_bias = 1  # Bullish
@@ -445,8 +447,8 @@ class SignalDetector:
                 self.or_bias = -1  # Bearish
                 if self.first_breakout_dir == 0:
                     self.first_breakout_dir = -1
-            elif bar.close >= self.or_low and bar.close <= self.or_high:
-                self.or_bias = 0  # Neutral
+            else:
+                self.or_bias = 0  # Neutral - includes buffer zones and inside OR
     
     def _calculate_value_area(self) -> ValueArea:
         """
