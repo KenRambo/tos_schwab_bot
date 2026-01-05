@@ -3,6 +3,11 @@ Signal Detector - Replicates ToS AMT Indicator Logic
 
 This module implements the same signal detection logic as your ThinkOrSwim
 indicator, translated to Python for use with live market data.
+
+FIXED 2026-01-05:
+- VA calculation now uses only last length_period bars for StdDev (matches ToS)
+- reset_session() clears bars to prevent cross-day contamination
+- Added VIX regime support
 """
 import logging
 from dataclasses import dataclass, field
@@ -87,29 +92,35 @@ class SignalDetector:
         self,
         length_period: int = 20,
         value_area_percent: float = 70.0,
-        volume_threshold: float = 1.3,
+        volume_threshold: float = 1.478,
         use_relaxed_volume: bool = True,
         min_confirmation_bars: int = 2,
-        sustained_bars_required: int = 3,
-        signal_cooldown_bars: int = 8,
+        sustained_bars_required: int = 5,
+        signal_cooldown_bars: int = 17,
         use_or_bias_filter: bool = True,
         or_buffer_points: float = 1.0,
         opening_range_minutes: int = 30,
         use_time_filter: bool = False,
         rth_only: bool = True,
-        # Signal enable/disable flags
+        # VIX Regime settings
+        use_vix_regime: bool = True,
+        vix_high_threshold: int = 25,
+        vix_low_threshold: int = 15,
+        high_vol_cooldown_mult: float = 1.43,
+        low_vol_cooldown_mult: float = 0.88,
+        # Signal enable/disable flags - OPTIMIZED DEFAULTS
         enable_val_bounce: bool = True,
-        enable_poc_reclaim: bool = True,
-        enable_breakout: bool = True,
-        enable_sustained_breakout: bool = True,
+        enable_poc_reclaim: bool = False,
+        enable_breakout: bool = False,
+        enable_sustained_breakout: bool = False,
         enable_prior_val_bounce: bool = True,
-        enable_prior_poc_reclaim: bool = True,
+        enable_prior_poc_reclaim: bool = False,
         enable_vah_rejection: bool = True,
-        enable_poc_breakdown: bool = True,
+        enable_poc_breakdown: bool = False,
         enable_breakdown: bool = True,
-        enable_sustained_breakdown: bool = True,
+        enable_sustained_breakdown: bool = False,
         enable_prior_vah_rejection: bool = True,
-        enable_prior_poc_breakdown: bool = True
+        enable_prior_poc_breakdown: bool = False
     ):
         # Configuration
         self.length_period = length_period
@@ -124,6 +135,14 @@ class SignalDetector:
         self.opening_range_minutes = opening_range_minutes
         self.use_time_filter = use_time_filter
         self.rth_only = rth_only
+        
+        # VIX Regime settings
+        self.use_vix_regime = use_vix_regime
+        self.vix_high_threshold = vix_high_threshold
+        self.vix_low_threshold = vix_low_threshold
+        self.high_vol_cooldown_mult = high_vol_cooldown_mult
+        self.low_vol_cooldown_mult = low_vol_cooldown_mult
+        self.current_vix: float = 20.0  # Default VIX value
         
         # Signal enable flags
         self.enable_val_bounce = enable_val_bounce
@@ -172,6 +191,34 @@ class SignalDetector:
         # Last signal tracking for cooldown
         self.last_signal_bar: int = 0
         self.total_bars: int = 0
+        
+        # Log configuration
+        logger.info(f"SignalDetector initialized:")
+        logger.info(f"  length_period={length_period}, volume_threshold={volume_threshold}")
+        logger.info(f"  signal_cooldown_bars={signal_cooldown_bars}, sustained_bars={sustained_bars_required}")
+        logger.info(f"  use_vix_regime={use_vix_regime}")
+        logger.info(f"  Enabled signals: VAL_BOUNCE={enable_val_bounce}, VAH_REJECTION={enable_vah_rejection}, "
+                   f"BREAKOUT={enable_breakout}, BREAKDOWN={enable_breakdown}, "
+                   f"SUSTAINED_BREAKOUT={enable_sustained_breakout}, SUSTAINED_BREAKDOWN={enable_sustained_breakdown}")
+    
+    def set_vix(self, vix_value: float) -> None:
+        """Update the current VIX value for regime-based cooldown adjustment"""
+        self.current_vix = vix_value
+    
+    def _get_effective_cooldown(self) -> int:
+        """Get the effective cooldown based on VIX regime"""
+        if not self.use_vix_regime:
+            return self.signal_cooldown_bars
+        
+        if self.current_vix >= self.vix_high_threshold:
+            # High volatility - longer cooldown
+            return round(self.signal_cooldown_bars * self.high_vol_cooldown_mult)
+        elif self.current_vix <= self.vix_low_threshold:
+            # Low volatility - shorter cooldown (but minimum 3)
+            return max(3, round(self.signal_cooldown_bars * self.low_vol_cooldown_mult))
+        else:
+            # Normal volatility
+            return self.signal_cooldown_bars
     
     def reset_session(self) -> None:
         """Reset session state for new trading day"""
@@ -189,6 +236,9 @@ class SignalDetector:
         self.session_vwap_sum = 0
         self.session_vol_weighted = 0
         
+        # FIX: Clear bars from previous session to prevent cross-day pollution
+        self.bars.clear()
+        
         # Reset opening range
         self.or_high = 0
         self.or_low = float('inf')
@@ -198,6 +248,13 @@ class SignalDetector:
         
         # Reset daily trade count
         self.daily_trade_count = 0
+        
+        # FIX: Reset position tracking counters
+        self.bars_above_vah = 0
+        self.bars_below_val = 0
+        
+        # FIX: Reset cooldown tracking
+        self.bars_since_signal = 999
         
         logger.info("Session reset for new trading day")
     
@@ -299,19 +356,16 @@ class SignalDetector:
         vwap = temp_vwap_sum / temp_session_volume
         poc = temp_vol_weighted / temp_session_volume
         
-        # Simplified VA calculation for live check
-        # Use recent bars for high/low range
-        recent = temp_bars[-self.length_period:]
-        period_high = max(b.high for b in recent)
-        period_low = min(b.low for b in recent)
+        # FIX: Use only the last length_period bars for std dev (matching ToS)
+        recent_bars = list(temp_bars)[-self.length_period:]
+        if len(recent_bars) >= 2:
+            closes = [b.close for b in recent_bars]
+            std_dev = statistics.stdev(closes)
+        else:
+            std_dev = 0
         
-        range_size = period_high - period_low
-        if range_size <= 0:
-            return None
-        
-        va_offset = range_size * (self.value_area_percent / 100) / 2
-        vah = poc + va_offset
-        val = poc - va_offset
+        vah = vwap + (std_dev * 0.5)
+        val = vwap - (std_dev * 0.5)
         
         va = ValueArea(vah=vah, val=val, poc=poc, vwap=vwap)
         
@@ -386,23 +440,37 @@ class SignalDetector:
                 self.or_bias = 0  # Neutral
     
     def _calculate_value_area(self) -> ValueArea:
-        """Calculate current value area levels"""
+        """
+        Calculate current value area levels.
+        
+        FIXED: Now matches ToS calculation:
+        - VAH = Session VWAP + (0.5 × StdDev of last N closes)
+        - VAL = Session VWAP - (0.5 × StdDev of last N closes)
+        - POC = Volume-weighted mid-price (session)
+        
+        The key fix is using only the last `length_period` bars for StdDev,
+        matching ToS: StDev(close, lengthPeriod)
+        """
         if self.session_volume == 0:
             return ValueArea(vah=0, val=0, poc=0, vwap=0)
         
-        # VWAP
+        # VWAP (session-based)
         vwap = self.session_vwap_sum / self.session_volume
         
-        # POC (volume-weighted price)
+        # POC (volume-weighted price, session-based)
         poc = self.session_vol_weighted / self.session_volume
         
-        # Value Area using standard deviation
-        closes = [bar.close for bar in self.bars]
-        if len(closes) >= 2:
+        # FIX: Use only the last length_period bars for std dev calculation
+        # This matches ToS: StDev(close, lengthPeriod)
+        recent_bars = list(self.bars)[-self.length_period:]
+        
+        if len(recent_bars) >= 2:
+            closes = [bar.close for bar in recent_bars]
             std_dev = statistics.stdev(closes)
         else:
             std_dev = 0
         
+        # Value Area = VWAP ± (0.5 × StdDev)
         vah = vwap + (std_dev * 0.5)
         val = vwap - (std_dev * 0.5)
         
@@ -444,8 +512,9 @@ class SignalDetector:
         return True
     
     def _check_cooldown(self) -> bool:
-        """Check if cooldown period has passed"""
-        return self.bars_since_signal >= self.signal_cooldown_bars
+        """Check if cooldown period has passed (with VIX adjustment)"""
+        effective_cooldown = self._get_effective_cooldown()
+        return self.bars_since_signal >= effective_cooldown
     
     def _check_volume_condition(self) -> bool:
         """Check volume conditions"""
@@ -701,6 +770,7 @@ class SignalDetector:
     def get_state_summary(self) -> dict:
         """Get current detector state summary"""
         va = self._calculate_value_area() if len(self.bars) >= self.length_period else None
+        effective_cooldown = self._get_effective_cooldown()
         
         return {
             "position": self.current_position.value,
@@ -711,6 +781,8 @@ class SignalDetector:
             "daily_trades": self.daily_trade_count,
             "bars_since_signal": self.bars_since_signal,
             "cooldown_clear": self._check_cooldown(),
+            "effective_cooldown": effective_cooldown,
+            "vix": self.current_vix,
             "vah": va.vah if va else 0,
             "val": va.val if va else 0,
             "poc": va.poc if va else 0,

@@ -16,6 +16,20 @@ A Python trading bot that replicates the signal logic from your ThinkOrSwim Auct
 
 **Key Finding:** Enabling short signals (VAH rejection + breakdown) increased P&L by 2.5x compared to long-only strategy.
 
+## 🔧 Recent Bug Fixes (January 5, 2026)
+
+Fixed critical bugs causing false signals and Value Area mismatch vs ToS:
+
+| Bug | Symptom | Root Cause | Fix |
+|-----|---------|------------|-----|
+| **VA off by ~$6** | Bot VAH: $654.70, ToS VAH: $660.35 | StdDev calculated on all 40 bars instead of last 20 | Use `list(self.bars)[-self.length_period:]` |
+| **Wild VA early session** | VAH: $707 at 12:30 (impossible) | Previous day's bars still in deque | Add `self.bars.clear()` in `reset_session()` |
+| **SUSTAINED_BREAKOUT firing when disabled** | Signal fired despite `enable_sustained_breakout=False` in config | Signal enable flags not passed from config to SignalDetector | Pass all `enable_*` flags in SignalDetector initialization |
+
+**Files Changed:**
+- `signal_detector.py` - Fixed `_calculate_value_area()` and `reset_session()`
+- `trading_bot.py` - Added all signal enable flags to SignalDetector init
+
 ## Overview
 
 This bot monitors SPY price action, detects the same signals your ToS indicator generates, and automatically executes trades:
@@ -205,7 +219,7 @@ class TradingConfig:
 @dataclass
 class SignalConfig:
     length_period: int = 20
-    volume_threshold: float = 1.48         # OPTIMIZED (was 1.3)
+    volume_threshold: float = 1.478        # OPTIMIZED (was 1.3)
     use_relaxed_volume: bool = True
     min_confirmation_bars: int = 2
     sustained_bars_required: int = 5       # OPTIMIZED (was 3)
@@ -219,6 +233,8 @@ class SignalConfig:
     enable_breakout: bool = False          # DISABLED by optimizer
     enable_poc_reclaim: bool = False       # Disabled - noisy
     enable_poc_breakdown: bool = False     # Disabled - noisy
+    enable_sustained_breakout: bool = False  # DISABLED
+    enable_sustained_breakdown: bool = False # DISABLED
     
     # VIX Regime
     use_vix_regime: bool = True            # OPTIMIZED
@@ -281,8 +297,8 @@ tos_schwab_bot/
 ```
 1. Load configuration
 2. Authenticate with Schwab API
-3. Initialize signal detector
-4. Load 30 historical bars to calculate VAH/POC/VAL
+3. Initialize signal detector with ALL config params (including signal enables)
+4. Load historical bars (today only) to calculate VAH/POC/VAL
 5. Set starting balance for position sizing
 6. Enter main trading loop
 ```
@@ -291,11 +307,15 @@ tos_schwab_bot/
 
 ```
 1. Fetch 5-minute bars from Schwab price history
-2. Calculate Value Area (VAH, POC, VAL) over 20 bars
+2. Calculate Value Area:
+   - VWAP = session volume-weighted average price
+   - StdDev = standard deviation of last 20 closes (not all bars!)
+   - VAH = VWAP + (StdDev × 0.5)
+   - VAL = VWAP - (StdDev × 0.5)
 3. Track Opening Range (first 30 min)
 4. Check all signal conditions
 5. Apply filters (OR bias, time, cooldown, daily limits)
-6. Generate signal if conditions met
+6. Generate signal if conditions met AND signal type is enabled
 ```
 
 ### Trade Execution Flow
@@ -305,11 +325,23 @@ tos_schwab_bot/
 2. Check daily loss limit
 3. Check delta exposure limit
 4. Calculate position size (fixed fractional)
-5. Find option at target delta (30Δ)
+5. Find option at target delta (67Δ morning, 83Δ afternoon)
 6. Verify buying power
 7. Place market order via Schwab API
 8. Track position until opposite signal
 9. Record P&L, update analytics
+```
+
+### Session Reset Flow (New Trading Day)
+
+```
+1. Save prior day VAH/VAL/POC
+2. Clear session accumulators (high, low, volume, VWAP)
+3. Clear bars deque (prevents cross-day contamination)
+4. Reset Opening Range tracking
+5. Reset daily trade count
+6. Reset bars_above_vah / bars_below_val counters
+7. Reset cooldown tracking
 ```
 
 ### Monitoring Flow
@@ -634,7 +666,7 @@ The Python signal detection mirrors your ToS script logic:
 
 | ToS Parameter | Python Equivalent | Optimized Value |
 |---------------|-------------------|-----------------|
-| `volumeThreshold` | `volume_threshold` | **1.48** |
+| `volumeThreshold` | `volume_threshold` | **1.478** |
 | `minConfirmationBars` | `min_confirmation_bars` | 2 |
 | `sustainedBarsRequired` | `sustained_bars_required` | **5** |
 | `signalCooldownBars` | `signal_cooldown_bars` | **17** |
@@ -644,6 +676,8 @@ The Python signal detection mirrors your ToS script logic:
 | `enableVAHRejection` | `enable_vah_rejection` | **True** |
 | `enableBreakout` | `enable_breakout` | **False** |
 | `enableBreakdown` | `enable_breakdown` | True |
+| `enableSustainedBreakout` | `enable_sustained_breakout` | **False** |
+| `enableSustainedBreakdown` | `enable_sustained_breakdown` | **False** |
 | `useVixRegime` | `use_vix_regime` | **True** |
 | `vixHighThreshold` | `vix_high_threshold` | 25 |
 | `vixLowThreshold` | `vix_low_threshold` | 15 |
@@ -660,15 +694,15 @@ The Python signal detection mirrors your ToS script logic:
 2025-01-02 10:30:05 ET - INFO - 🚨 SIGNAL: VAL_BOUNCE - LONG
 2025-01-02 10:30:05 ET - INFO - Position sizing: $10,000.00 balance, 2.0% risk = 3 contracts
 2025-01-02 10:30:05 ET - INFO - Delta exposure OK: 0 + 30 = 30 (max: 100)
-2025-01-02 10:30:05 ET - INFO - Looking for CALL option, SPY @ $591.25, target delta: 30%
-2025-01-02 10:30:05 ET - INFO - Selected: SPY250102C00593000 | Strike: 593.0 | Delta: 0.31
+2025-01-02 10:30:05 ET - INFO - Looking for CALL option, SPY @ $591.25, target delta: 67%
+2025-01-02 10:30:05 ET - INFO - Selected: SPY250102C00593000 | Strike: 593.0 | Delta: 0.67
 2025-01-02 10:30:05 ET - INFO - Trade executed: T00001
 ```
 
 ## Safety Features
 
 1. **Paper Trading Default** - Won't place real orders until explicitly enabled
-2. **Daily Trade Limit** - Prevents overtrading (default: 3/day)
+2. **Daily Trade Limit** - Prevents overtrading (default: 6/day)
 3. **Daily Loss Limit** - Stops trading when down $500 or 5%
 4. **Delta Exposure Limit** - Prevents over-leveraging
 5. **RTH Only** - No trades outside market hours
@@ -700,12 +734,39 @@ The Python signal detection mirrors your ToS script logic:
 ### No signals firing
 - Check if within RTH hours (9:30 AM - 4:00 PM ET)
 - Verify OR bias filter isn't blocking (signals must align with opening range direction)
-- Check signal cooldown (8 bars = 40 min between signals)
+- Check signal cooldown (17 bars = ~85 min between signals)
 - Enable debug logging: Change `level=logging.INFO` to `level=logging.DEBUG`
+
+### Value Area doesn't match ToS
+- **Fixed in v1.1** - StdDev now uses last 20 bars only (was using all 40)
+- **Fixed in v1.1** - Session reset now clears bars deque
+- Restart bot after updating `signal_detector.py`
+
+### Signals firing when they should be disabled
+- **Fixed in v1.1** - All `enable_*` flags now passed to SignalDetector
+- Update both `signal_detector.py` and `trading_bot.py`
+- Verify your `config.py` has the correct enable flags set
 
 ### No push notifications
 - Verify `PUSHOVER_USER_KEY` and `PUSHOVER_API_TOKEN` in `.env`
 - Test with: `python -c "from notifications import get_notifier; get_notifier().send('Test', 'Test')"`
+
+## Changelog
+
+### v1.1 (January 5, 2026)
+- **FIXED:** Value Area calculation now matches ToS exactly (StdDev uses last N bars only)
+- **FIXED:** Session reset clears bars deque to prevent cross-day contamination  
+- **FIXED:** All signal enable flags now passed from config to SignalDetector
+- **ADDED:** VIX regime support with dynamic cooldown adjustment
+- **ADDED:** `bars_above_vah` / `bars_below_val` counters in state summary
+
+### v1.0 (December 2025)
+- Initial release with full signal detection matching ToS AMT indicator
+- Schwab API integration for automated options trading
+- Opening Range bias filter
+- Daily trade lockout system
+- Pushover notifications
+- Backtesting and optimization tools
 
 ## Disclaimer
 

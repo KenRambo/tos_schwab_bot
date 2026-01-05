@@ -7,6 +7,17 @@ and automatically trades the nearest OTM SPY options via the Schwab API.
 Strategy: Hold until opposite signal
 - LONG signal -> Buy nearest OTM CALL
 - SHORT signal -> Close CALL, Buy nearest OTM PUT
+
+FIXED 2026-01-05:
+- Signal enable flags now passed from config to SignalDetector
+- VIX regime support added
+
+CLI Usage:
+    python trading_bot.py                           # Default (SPY)
+    python trading_bot.py --symbol QQQ              # Trade QQQ
+    python trading_bot.py --symbol IWM --paper      # Paper trade IWM
+    python trading_bot.py --symbol SPY -c 2 -m 5    # 2 contracts, max 5 trades
+    python trading_bot.py --help                    # Show all options
 """
 from dotenv import load_dotenv
 load_dotenv()
@@ -15,6 +26,7 @@ import sys
 import time
 import signal as sig
 import logging
+import argparse
 from datetime import datetime, time as dt_time, date, timedelta, timezone
 from typing import Optional, Dict, Any
 import json
@@ -148,7 +160,8 @@ class TradingBot:
             account_hash = self.client.get_account_hash()
             logger.info(f"Connected to account: {account_hash[:8]}...")
             
-            # Initialize signal detector
+            # Initialize signal detector with ALL config values including signal enables
+            # FIXED: Now passes all enable flags from config
             self.detector = SignalDetector(
                 length_period=self.config.signal.length_period,
                 value_area_percent=self.config.signal.value_area_percent,
@@ -160,7 +173,26 @@ class TradingBot:
                 use_or_bias_filter=self.config.signal.use_or_bias_filter,
                 or_buffer_points=self.config.signal.or_buffer_points,
                 use_time_filter=self.config.time.use_time_filter,
-                rth_only=self.config.time.rth_only
+                rth_only=self.config.time.rth_only,
+                # VIX Regime settings - FIXED: Now passed from config
+                use_vix_regime=self.config.signal.use_vix_regime,
+                vix_high_threshold=self.config.signal.vix_high_threshold,
+                vix_low_threshold=self.config.signal.vix_low_threshold,
+                high_vol_cooldown_mult=self.config.signal.high_vol_cooldown_mult,
+                low_vol_cooldown_mult=self.config.signal.low_vol_cooldown_mult,
+                # Signal enable flags - FIXED: These were missing before!
+                enable_val_bounce=self.config.signal.enable_val_bounce,
+                enable_poc_reclaim=self.config.signal.enable_poc_reclaim,
+                enable_breakout=self.config.signal.enable_breakout,
+                enable_sustained_breakout=self.config.signal.enable_sustained_breakout,
+                enable_prior_val_bounce=self.config.signal.enable_prior_val_bounce,
+                enable_prior_poc_reclaim=self.config.signal.enable_prior_poc_reclaim,
+                enable_vah_rejection=self.config.signal.enable_vah_rejection,
+                enable_poc_breakdown=self.config.signal.enable_poc_breakdown,
+                enable_breakdown=self.config.signal.enable_breakdown,
+                enable_sustained_breakdown=self.config.signal.enable_sustained_breakdown,
+                enable_prior_vah_rejection=self.config.signal.enable_prior_vah_rejection,
+                enable_prior_poc_breakdown=self.config.signal.enable_prior_poc_breakdown
             )
             
             # Initialize position manager
@@ -229,6 +261,17 @@ class TradingBot:
             logger.info(f"Mode: {'PAPER TRADING' if self.config.paper_trading else 'LIVE TRADING'}")
             logger.info(f"Symbol: {self.config.trading.symbol}")
             logger.info(f"Max daily trades: {self.config.trading.max_daily_trades}")
+            
+            # Log enabled signals
+            logger.info("Enabled signals:")
+            logger.info(f"  LONG: VAL_BOUNCE={self.config.signal.enable_val_bounce}, "
+                       f"POC_RECLAIM={self.config.signal.enable_poc_reclaim}, "
+                       f"BREAKOUT={self.config.signal.enable_breakout}, "
+                       f"SUSTAINED_BREAKOUT={self.config.signal.enable_sustained_breakout}")
+            logger.info(f"  SHORT: VAH_REJECTION={self.config.signal.enable_vah_rejection}, "
+                       f"POC_BREAKDOWN={self.config.signal.enable_poc_breakdown}, "
+                       f"BREAKDOWN={self.config.signal.enable_breakdown}, "
+                       f"SUSTAINED_BREAKDOWN={self.config.signal.enable_sustained_breakdown}")
             
             # Load historical bars to initialize detector
             self._load_historical_bars()
@@ -524,6 +567,14 @@ class TradingBot:
         # Update position tracking
         self.position_manager.update_bars_held()
         
+        # Update VIX if available (for regime-based cooldown)
+        try:
+            vix_quote = self.client.get_quote("$VIX.X")  # Schwab VIX symbol
+            if vix_quote and hasattr(vix_quote, 'last_price'):
+                self.detector.set_vix(vix_quote.last_price)
+        except:
+            pass  # VIX not available, use default
+        
         # Add bar to detector and check for signals
         signal = self.detector.add_bar(bar)
         
@@ -567,11 +618,12 @@ class TradingBot:
         if pos['status'] != 'FLAT':
             logger.info(f"  Current Position: {pos['status']} | P&L: ${pos.get('unrealized_pnl', 0):.2f}")
         
-        # Cooldown status
+        # Cooldown status (now shows effective cooldown with VIX adjustment)
         cooldown = state.get('bars_since_signal', 999)
-        cooldown_bars = self.config.signal.signal_cooldown_bars
-        if cooldown < cooldown_bars:
-            logger.info(f"  Cooldown: {cooldown}/{cooldown_bars} bars")
+        effective_cooldown = state.get('effective_cooldown', self.config.signal.signal_cooldown_bars)
+        if cooldown < effective_cooldown:
+            vix_info = f" (VIX: {state.get('vix', 20):.1f})" if self.config.signal.use_vix_regime else ""
+            logger.info(f"  Cooldown: {cooldown}/{effective_cooldown} bars{vix_info}")
         
         if signal:
             self.signals_generated += 1
@@ -842,6 +894,7 @@ class TradingBot:
         logger.info(f"  VAH: {detector_state.get('vah', 0):.2f}")
         logger.info(f"  POC: {detector_state.get('poc', 0):.2f}")
         logger.info(f"  VAL: {detector_state.get('val', 0):.2f}")
+        logger.info(f"  VIX: {detector_state.get('vix', 20):.1f}")
         logger.info(f"  Trades today: {daily_stats.get('trades_taken', 0)}/{self.config.trading.max_daily_trades}")
         logger.info(f"  Bars processed: {self.bars_processed}")
         logger.info(f"  Signals: {self.signals_generated}")
@@ -879,7 +932,8 @@ class TradingBot:
         daily_stats = self.position_manager.get_daily_stats()
         self.notifier.bot_stopped(
             trades=daily_stats.get('total_trades', 0),
-            pnl=daily_stats.get('total_pnl', 0)
+            pnl=daily_stats.get('total_pnl', 0),
+            symbol=self.config.trading.symbol
         )
         
         logger.info("Bot stopped")
@@ -907,10 +961,84 @@ class TradingBot:
 
 
 def main():
-    """Main entry point"""
+    """Main entry point with CLI argument support"""
+    parser = argparse.ArgumentParser(
+        description='ToS Signal Trading Bot - Options Trading',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s                              Run with default config (SPY)
+  %(prog)s --symbol QQQ                 Trade QQQ instead of SPY
+  %(prog)s --symbol IWM --paper         Paper trade IWM
+  %(prog)s --symbol SPY -c 2 -m 5       2 contracts, max 5 trades/day
+  %(prog)s --help                       Show all options
+  
+Running multiple symbols as daemons:
+  %(prog)s --symbol SPY --no-confirm &
+  %(prog)s --symbol QQQ --no-confirm &
+  %(prog)s --symbol IWM --paper --no-confirm &
+        """
+    )
+    
+    parser.add_argument(
+        '--symbol', '-s',
+        type=str,
+        default=None,
+        help='Trading symbol (default: from config, usually SPY)'
+    )
+    
+    parser.add_argument(
+        '--paper', '-p',
+        action='store_true',
+        default=None,
+        help='Enable paper trading mode'
+    )
+    
+    parser.add_argument(
+        '--live',
+        action='store_true',
+        help='Force live trading mode (overrides config)'
+    )
+    
+    parser.add_argument(
+        '--contracts', '-c',
+        type=int,
+        default=None,
+        help='Number of contracts per trade'
+    )
+    
+    parser.add_argument(
+        '--max-trades', '-m',
+        type=int,
+        default=None,
+        help='Maximum trades per day'
+    )
+    
+    parser.add_argument(
+        '--no-confirm', '-y',
+        action='store_true',
+        help='Skip confirmation prompt (for daemon/background mode)'
+    )
+    
+    parser.add_argument(
+        '--cooldown',
+        type=int,
+        default=None,
+        help='Signal cooldown in bars (default: from config)'
+    )
+    
+    parser.add_argument(
+        '--log-file',
+        type=str,
+        default=None,
+        help='Custom log file path (default: trading_bot.log or {symbol}_bot.log)'
+    )
+    
+    args = parser.parse_args()
+    
     print("""
     ╔══════════════════════════════════════════════════════════════╗
-    ║         ToS Signal Trading Bot - SPY Options                ║
+    ║         ToS Signal Trading Bot - Options Trading            ║
     ║         Based on Auction Market Theory Indicator            ║
     ╚══════════════════════════════════════════════════════════════╝
     """)
@@ -927,26 +1055,83 @@ def main():
         print("  https://developer.schwab.com/")
         return
     
-    # Check for --no-confirm flag (for background/daemon mode)
-    no_confirm = '--no-confirm' in sys.argv or '-y' in sys.argv
-    
     # Load configuration
     bot_config = BotConfig()
     
+    # Override config with CLI arguments
+    print("\n🔧 CLI Overrides:")
+    overrides_applied = False
+    
+    if args.symbol:
+        bot_config.trading.symbol = args.symbol.upper()
+        print(f"  ✓ Symbol: {bot_config.trading.symbol}")
+        overrides_applied = True
+    
+    if args.paper:
+        bot_config.paper_trading = True
+        print(f"  ✓ Paper trading: ENABLED")
+        overrides_applied = True
+    elif args.live:
+        bot_config.paper_trading = False
+        print(f"  ✓ Live trading: ENABLED")
+        overrides_applied = True
+    
+    if args.contracts:
+        bot_config.trading.contracts = args.contracts
+        print(f"  ✓ Contracts: {args.contracts}")
+        overrides_applied = True
+    
+    if args.max_trades:
+        bot_config.trading.max_daily_trades = args.max_trades
+        print(f"  ✓ Max daily trades: {args.max_trades}")
+        overrides_applied = True
+    
+    if args.cooldown:
+        bot_config.signal.signal_cooldown_bars = args.cooldown
+        print(f"  ✓ Signal cooldown: {args.cooldown} bars")
+        overrides_applied = True
+    
+    if not overrides_applied:
+        print("  (none - using config defaults)")
+    
+    # Setup custom log file if specified (useful for multiple instances)
+    if args.log_file:
+        # Add file handler for custom log
+        file_handler = logging.FileHandler(args.log_file)
+        file_handler.setFormatter(et_formatter)
+        logging.root.addHandler(file_handler)
+        print(f"  ✓ Log file: {args.log_file}")
+    elif args.symbol and args.symbol.upper() != 'SPY':
+        # Auto-create symbol-specific log file
+        # Strip leading slash for futures symbols (e.g., /BTC -> btc)
+        safe_symbol = args.symbol.lower().lstrip('/')
+        log_file = f"{safe_symbol}_bot.log"
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setFormatter(et_formatter)
+        logging.root.addHandler(file_handler)
+        print(f"  ✓ Log file: {log_file} (auto-created for {args.symbol.upper()})")
+    
     # Display configuration
-    print(f"\n📊 Configuration:")
+    print(f"\n📊 Final Configuration:")
     print(f"  Symbol: {bot_config.trading.symbol}")
     print(f"  Contracts: {bot_config.trading.contracts}")
     print(f"  Max daily trades: {bot_config.trading.max_daily_trades}")
     print(f"  Paper trading: {bot_config.paper_trading}")
     print(f"  RTH only: {bot_config.time.rth_only}")
     print(f"  OR bias filter: {bot_config.signal.use_or_bias_filter}")
+    print(f"  Signal cooldown: {bot_config.signal.signal_cooldown_bars} bars")
+    print(f"  VIX regime: {bot_config.signal.use_vix_regime}")
+    
+    # Show enabled signals
+    print(f"\n📊 Enabled Signals:")
+    print(f"  LONG: VAL_BOUNCE={bot_config.signal.enable_val_bounce}, BREAKOUT={bot_config.signal.enable_breakout}, SUSTAINED={bot_config.signal.enable_sustained_breakout}")
+    print(f"  SHORT: VAH_REJECTION={bot_config.signal.enable_vah_rejection}, BREAKDOWN={bot_config.signal.enable_breakdown}, SUSTAINED={bot_config.signal.enable_sustained_breakdown}")
     
     if bot_config.paper_trading:
         print("\n📝 PAPER TRADING MODE - No real orders will be placed")
     else:
         print("\n⚠️  LIVE TRADING MODE - Real orders will be placed!")
-        if no_confirm:
+        if args.no_confirm:
             print("   (--no-confirm flag set, skipping confirmation)")
         else:
             confirm = input("Type 'CONFIRM' to proceed: ")
@@ -957,7 +1142,7 @@ def main():
     # Create and start bot
     bot = TradingBot(bot_config)
     
-    print("\n🚀 Starting bot...")
+    print(f"\n🚀 Starting {bot_config.trading.symbol} bot...")
     bot.start()
 
 

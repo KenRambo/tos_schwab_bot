@@ -1,10 +1,15 @@
 """
 Configuration settings for the ToS Signal Trading Bot
 ======================================================
-Auto-generated from optimization results on 2026-01-02 12:50:26
+OPTIMIZED from variant_a_seed_789_best_pnl on 2026-01-05
 
-OPTIMIZED VERSION
-To regenerate: python apply_config_simple.py --from <results.json>
+Optimization Results:
+- Win Rate: 72.58%
+- Total P&L: $274,048.37
+- Total Trades: 62
+- Profit Factor: 3.25
+- Sharpe Ratio: 5.58
+- Max Drawdown: $32,715.08
 """
 import os
 from dataclasses import dataclass, field
@@ -23,42 +28,49 @@ class SchwabConfig:
 
 @dataclass
 class TradingConfig:
-    """Trading parameters - OPTIMIZED"""
+    """Trading parameters - OPTIMIZED from variant_a_seed_789"""
     symbol: str = "SPY"
     contracts: int = 1
-    max_daily_trades: int = 6
+    max_daily_trades: int = 6  # OPTIMIZED
     
+    # Delta targeting
     use_delta_targeting: bool = True
-    target_delta: float = 0.67
-    afternoon_delta: float = 0.83
-    afternoon_start_hour: int = 12
+    target_delta: float = 0.67  # OPTIMIZED
+    afternoon_delta: float = 0.83  # OPTIMIZED
+    afternoon_start_hour: int = 12  # OPTIMIZED
     min_days_to_expiry: int = 0
     max_days_to_expiry: int = 0
     prefer_weekly: bool = True
     
     hold_until_opposite_signal: bool = True
     
+    # Position sizing - OPTIMIZED
     use_fixed_fractional: bool = True
-    risk_percent_per_trade: float = 23.0
-    max_position_size: int = 99
+    risk_percent_per_trade: float = 23.0  # OPTIMIZED (max_equity_risk from JSON)
+    max_position_size: int = 99  # OPTIMIZED (hard_max_contracts)
     min_position_size: int = 1
     
+    # Daily loss limit
     enable_daily_loss_limit: bool = True
     max_daily_loss_dollars: float = 500.0
     max_daily_loss_percent: float = 5.0
     
-    enable_stop_loss: bool = False
-    stop_loss_percent: float = 65.0
+    # Stop loss - OPTIMIZED
+    enable_stop_loss: bool = False  # OPTIMIZED (disabled)
+    stop_loss_percent: float = 65.0  # OPTIMIZED
     stop_loss_dollars: float = 500.0
     
+    # Take profit
     enable_take_profit: bool = False
     take_profit_percent: float = 100.0
     take_profit_dollars: float = 500.0
     
-    enable_trailing_stop: bool = True
-    trailing_stop_percent: float = 21.0
-    trailing_stop_activation: float = 32.0
+    # Trailing stop - OPTIMIZED
+    enable_trailing_stop: bool = True  # OPTIMIZED
+    trailing_stop_percent: float = 21.0  # OPTIMIZED
+    trailing_stop_activation: float = 32.0  # OPTIMIZED
     
+    # Correlation / exposure
     enable_correlation_check: bool = True
     max_delta_exposure: float = 100.0
 
@@ -80,44 +92,61 @@ class TimeConfig:
 
 @dataclass 
 class SignalConfig:
-    """Signal detection configuration - OPTIMIZED"""
+    """Signal detection configuration - OPTIMIZED from variant_a_seed_789"""
     length_period: int = 20
     value_area_percent: float = 70.0
     
-    volume_threshold: float = 1.48
+    # Volume - OPTIMIZED
+    volume_threshold: float = 1.478  # OPTIMIZED
     use_relaxed_volume: bool = True
     
-    min_confirmation_bars: int = 2
-    sustained_bars_required: int = 5
-    signal_cooldown_bars: int = 17
+    # Confirmation - OPTIMIZED
+    min_confirmation_bars: int = 2  # OPTIMIZED
+    sustained_bars_required: int = 5  # OPTIMIZED
+    signal_cooldown_bars: int = 17  # OPTIMIZED
     
-    use_or_bias_filter: bool = True
+    # Opening Range - OPTIMIZED
+    use_or_bias_filter: bool = True  # OPTIMIZED
     or_buffer_points: float = 1.0
     
-    use_vix_regime: bool = True
-    vix_high_threshold: int = 25
-    vix_low_threshold: int = 15
-    high_vol_cooldown_mult: float = 1.43
-    low_vol_cooldown_mult: float = 0.88
+    # VIX Regime - OPTIMIZED
+    use_vix_regime: bool = True  # OPTIMIZED
+    vix_high_threshold: int = 25  # OPTIMIZED
+    vix_low_threshold: int = 15  # OPTIMIZED
+    high_vol_cooldown_mult: float = 1.43  # OPTIMIZED
+    low_vol_cooldown_mult: float = 0.88  # OPTIMIZED
     
-    enable_val_bounce: bool = True
-    enable_poc_reclaim: bool = False
-    enable_breakout: bool = False
-    enable_sustained_breakout: bool = False
+    # Signal Enables - OPTIMIZED
+    # Long signals
+    enable_val_bounce: bool = True  # OPTIMIZED - ENABLED
+    enable_poc_reclaim: bool = False  # OPTIMIZED - DISABLED
+    enable_breakout: bool = False  # OPTIMIZED - DISABLED
+    enable_sustained_breakout: bool = False  # OPTIMIZED - DISABLED
     
-    enable_vah_rejection: bool = True
-    enable_poc_breakdown: bool = False
-    enable_breakdown: bool = True
-    enable_sustained_breakdown: bool = False
+    # Short signals
+    enable_vah_rejection: bool = True  # OPTIMIZED - ENABLED
+    enable_poc_breakdown: bool = False  # OPTIMIZED - DISABLED
+    enable_breakdown: bool = True  # OPTIMIZED - ENABLED
+    enable_sustained_breakdown: bool = False  # OPTIMIZED - DISABLED
     
+    # Prior day signals
+    enable_prior_val_bounce: bool = True
+    enable_prior_vah_rejection: bool = True
+    enable_prior_poc_reclaim: bool = False
+    enable_prior_poc_breakdown: bool = False
+    
+    # Misc
     min_es_point_move: float = 6.0
 
 
 @dataclass
 class AlertConfig:
     """Alert/notification settings"""
-    enable_discord: bool = False
+    enable_discord: bool = True
     discord_webhook: str = os.getenv("DISCORD_WEBHOOK", "")
+    enable_pushover: bool = True
+    pushover_user_key: str = os.getenv("PUSHOVER_USER_KEY", "")
+    pushover_api_token: str = os.getenv("PUSHOVER_API_TOKEN", "")
     enable_telegram: bool = False
     telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
     telegram_chat_id: str = os.getenv("TELEGRAM_CHAT_ID", "")
@@ -159,4 +188,4 @@ class BotConfig:
         return True
 
 
-config = BotConfig()
+config = BotConfig()    

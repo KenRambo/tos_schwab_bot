@@ -162,7 +162,7 @@ class SignalConfig:
 @dataclass
 class AlertConfig:
     """Alert/notification settings"""
-    enable_discord: bool = False
+    enable_discord: bool = True
     discord_webhook: str = os.getenv("DISCORD_WEBHOOK", "")
     
     enable_telegram: bool = False

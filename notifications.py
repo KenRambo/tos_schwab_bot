@@ -1,514 +1,353 @@
 """
-Push Notification Support via Pushover and Discord
+Notification System for Trading Bot
 
-Setup Pushover:
-1. Download Pushover app on iOS/Android ($5 one-time)
-2. Create account at pushover.net
-3. Get your User Key from the dashboard
-4. Create an Application/API Token
-5. Add to .env:
-   PUSHOVER_USER_KEY=your-user-key
-   PUSHOVER_API_TOKEN=your-api-token
+Supports:
+- Pushover (iOS/Android push notifications)
+- Discord (webhook)
 
-Setup Discord:
-1. In your Discord server, go to Server Settings > Integrations > Webhooks
-2. Create a new webhook and copy the URL
-3. Add to .env:
-   DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
+All notifications include the trading symbol for multi-bot clarity.
 """
+
 import os
-import logging
 import requests
+import logging
 from typing import Optional
-from enum import Enum
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
 
-class NotificationPriority(Enum):
-    """Pushover priority levels"""
-    LOWEST = -2      # No notification
-    LOW = -1         # Quiet notification
-    NORMAL = 0       # Normal notification
-    HIGH = 1         # High priority, bypasses quiet hours
-    EMERGENCY = 2    # Requires acknowledgment
-
-
 class PushoverNotifier:
-    """Send push notifications via Pushover"""
+    """Send notifications via Pushover"""
     
-    API_URL = "https://api.pushover.net/1/messages.json"
+    # Sound options
+    SOUNDS = {
+        'start': 'bike',
+        'stop': 'gamelan', 
+        'signal': 'cashregister',
+        'trade': 'bugle',
+        'profit': 'magic',
+        'loss': 'falling',
+        'error': 'siren',
+        'warning': 'pushover',
+        'summary': 'classical'
+    }
     
-    def __init__(
-        self,
-        user_key: Optional[str] = None,
-        api_token: Optional[str] = None,
-        enabled: bool = True
-    ):
-        self.user_key = user_key or os.getenv('PUSHOVER_USER_KEY', '')
-        self.api_token = api_token or os.getenv('PUSHOVER_API_TOKEN', '')
-        self.enabled = enabled and bool(self.user_key and self.api_token)
+    def __init__(self, user_key: str = None, api_token: str = None):
+        self.user_key = user_key or os.getenv('PUSHOVER_USER_KEY')
+        self.api_token = api_token or os.getenv('PUSHOVER_API_TOKEN')
+        self.enabled = bool(self.user_key and self.api_token)
         
-        if enabled and not self.enabled:
-            logger.warning("Pushover notifications disabled - missing PUSHOVER_USER_KEY or PUSHOVER_API_TOKEN")
-    
-    def send(
-        self,
-        message: str,
-        title: Optional[str] = None,
-        priority: NotificationPriority = NotificationPriority.NORMAL,
-        sound: Optional[str] = None,
-        url: Optional[str] = None,
-        url_title: Optional[str] = None
-    ) -> bool:
-        """
-        Send a push notification.
-        
-        Args:
-            message: The notification message
-            title: Optional title (defaults to "Trading Bot")
-            priority: Notification priority level
-            sound: Custom sound (see Pushover docs)
-            url: Optional URL to include
-            url_title: Title for the URL
-            
-        Returns:
-            True if sent successfully, False otherwise
-        """
         if not self.enabled:
-            logger.debug(f"Notification skipped (disabled): {message}")
+            logger.warning("Pushover not configured - notifications disabled")
+    
+    def send(self, title: str, message: str, priority: int = 0, sound: str = None) -> bool:
+        """Send a notification via Pushover"""
+        if not self.enabled:
+            logger.debug(f"[NOTIFICATION] {title}: {message}")
             return False
         
         try:
-            data = {
-                'token': self.api_token,
-                'user': self.user_key,
-                'message': message,
-                'title': title or 'Trading Bot',
-                'priority': priority.value if isinstance(priority, NotificationPriority) else priority,
-            }
+            response = requests.post(
+                'https://api.pushover.net/1/messages.json',
+                data={
+                    'token': self.api_token,
+                    'user': self.user_key,
+                    'title': title,
+                    'message': message,
+                    'priority': priority,
+                    'sound': sound or 'pushover'
+                },
+                timeout=10
+            )
             
-            if sound:
-                data['sound'] = sound
-            if url:
-                data['url'] = url
-            if url_title:
-                data['url_title'] = url_title
-            
-            # Emergency priority requires retry/expire params
-            if priority == NotificationPriority.EMERGENCY:
-                data['retry'] = 60  # Retry every 60 seconds
-                data['expire'] = 300  # Stop after 5 minutes
-            
-            response = requests.post(self.API_URL, data=data, timeout=10)
-            response.raise_for_status()
-            
-            logger.debug(f"Notification sent: {title or 'Trading Bot'} - {message[:50]}...")
-            return True
-            
+            if response.status_code == 200:
+                logger.debug(f"Notification sent: {title}")
+                return True
+            else:
+                logger.warning(f"Pushover error: {response.status_code} - {response.text}")
+                return False
+                
         except Exception as e:
             logger.error(f"Failed to send notification: {e}")
             return False
     
-    # Convenience methods for common notifications
+    # =========================================================================
+    # Convenience Methods - All include symbol in title
+    # =========================================================================
     
-    def signal_alert(self, signal_type: str, direction: str, price: float, symbol: str = "SPY"):
-        """Notify on new trading signal"""
-        emoji = "📈" if direction == "LONG" else "📉"
+    def bot_started(self, mode: str, symbol: str) -> bool:
+        """Notification when bot starts"""
         return self.send(
-            message=f"{direction} @ ${price:.2f}\n{signal_type}",
-            title=f"{emoji} {symbol} Signal",
-            priority=NotificationPriority.HIGH,
-            sound="cashregister"
+            title=f"🤖 {symbol} Bot Started",
+            message=f"Mode: {mode}\nSymbol: {symbol}\nTime: {datetime.now().strftime('%H:%M:%S')}",
+            priority=-1,
+            sound=self.SOUNDS['start']
         )
     
-    def trade_executed(self, direction: str, symbol: str, option_symbol: str, price: float, quantity: int):
-        """Notify on trade execution"""
-        emoji = "🟢" if direction == "LONG" else "🔴"
+    def bot_stopped(self, trades: int, pnl: float, symbol: str = "BOT") -> bool:
+        """Notification when bot stops"""
+        pnl_emoji = "🟢" if pnl >= 0 else "🔴"
         return self.send(
-            message=f"{direction} {quantity}x {option_symbol}\n@ ${price:.2f}",
-            title=f"{emoji} Trade Executed",
-            priority=NotificationPriority.HIGH,
-            sound="bugle"
+            title=f"🛑 {symbol} Bot Stopped",
+            message=f"Trades: {trades}\nP&L: {pnl_emoji} ${pnl:,.2f}\nTime: {datetime.now().strftime('%H:%M:%S')}",
+            priority=0,
+            sound=self.SOUNDS['stop']
         )
     
-    def trade_closed(self, direction: str, pnl: float, pnl_percent: float, reason: str):
-        """Notify on position close"""
-        emoji = "💰" if pnl >= 0 else "💸"
-        sign = "+" if pnl >= 0 else ""
+    def signal_alert(self, signal_type: str, direction: str, price: float, symbol: str) -> bool:
+        """Notification when signal is detected"""
+        emoji = "📈" if direction.upper() == "LONG" else "📉"
         return self.send(
-            message=f"P&L: {sign}${pnl:.2f} ({sign}{pnl_percent:.1f}%)\nReason: {reason}",
-            title=f"{emoji} Position Closed",
-            priority=NotificationPriority.NORMAL,
-            sound="magic" if pnl >= 0 else "falling"
+            title=f"{emoji} {symbol} {direction} Signal",
+            message=f"Type: {signal_type}\nPrice: ${price:.2f}\nTime: {datetime.now().strftime('%H:%M:%S')}",
+            priority=1,
+            sound=self.SOUNDS['signal']
         )
     
-    def trade_rejected(self, reason: str, details: str = ""):
-        """Notify on trade rejection"""
+    def trade_executed(self, direction: str, symbol: str, option_symbol: str, 
+                       price: float, quantity: int) -> bool:
+        """Notification when trade is executed"""
+        emoji = "🟢" if direction.upper() == "LONG" else "🔴"
         return self.send(
-            message=f"{reason}\n{details}" if details else reason,
-            title="❌ Trade Rejected",
-            priority=NotificationPriority.HIGH,
-            sound="pushover"
+            title=f"{emoji} {symbol} {direction} Trade Filled",
+            message=f"Option: {option_symbol}\nPrice: ${price:.2f}\nQty: {quantity}",
+            priority=1,
+            sound=self.SOUNDS['trade']
         )
     
-    def error_alert(self, error: str):
-        """Notify on error"""
+    def trade_closed(self, direction: str, pnl: float, pnl_percent: float, 
+                     reason: str, symbol: str = "SPY") -> bool:
+        """Notification when trade is closed"""
+        if pnl >= 0:
+            emoji = "💰"
+            sound = self.SOUNDS['profit']
+        else:
+            emoji = "📉"
+            sound = self.SOUNDS['loss']
+        
         return self.send(
-            message=error[:500],  # Truncate long errors
-            title="⚠️ Bot Error",
-            priority=NotificationPriority.HIGH,
-            sound="siren"
+            title=f"{emoji} {symbol} Position Closed",
+            message=f"Direction: {direction}\nP&L: ${pnl:,.2f} ({pnl_percent:+.1f}%)\nReason: {reason}",
+            priority=0,
+            sound=sound
         )
     
-    def bot_started(self, mode: str, symbol: str):
-        """Notify bot started"""
+    def trade_rejected(self, reason: str, details: str = "", symbol: str = "SPY") -> bool:
+        """Notification when trade is rejected"""
         return self.send(
-            message=f"Mode: {mode}\nSymbol: {symbol}",
-            title="🤖 Bot Started",
-            priority=NotificationPriority.LOW,
-            sound="bike"
+            title=f"❌ {symbol} Trade Rejected",
+            message=f"Reason: {reason}\n{details}" if details else f"Reason: {reason}",
+            priority=0,
+            sound=self.SOUNDS['warning']
         )
     
-    def bot_stopped(self, trades: int, pnl: float):
-        """Notify bot stopped"""
-        sign = "+" if pnl >= 0 else ""
+    def error_alert(self, error: str, symbol: str = "BOT") -> bool:
+        """Notification for errors"""
         return self.send(
-            message=f"Trades: {trades}\nP&L: {sign}${pnl:.2f}",
-            title="🛑 Bot Stopped",
-            priority=NotificationPriority.LOW,
-            sound="gamelan"
+            title=f"⚠️ {symbol} Bot Error",
+            message=str(error)[:200],  # Truncate long errors
+            priority=1,
+            sound=self.SOUNDS['error']
         )
     
-    def daily_summary(self, trades: int, wins: int, pnl: float, symbol: str = "SPY"):
-        """Send daily performance summary"""
+    def daily_summary(self, trades: int, wins: int, pnl: float, symbol: str) -> bool:
+        """End of day summary notification"""
         win_rate = (wins / trades * 100) if trades > 0 else 0
-        emoji = "📈" if pnl >= 0 else "📉"
-        sign = "+" if pnl >= 0 else ""
-        return self.send(
-            message=f"Trades: {trades}\nWins: {wins} ({win_rate:.0f}%)\nP&L: {sign}${pnl:.2f}",
-            title=f"{emoji} {symbol} Daily Summary",
-            priority=NotificationPriority.NORMAL,
-            sound="classical"
-        )
-    
-    def weekly_report(
-        self,
-        total_trades: int,
-        wins: int,
-        losses: int,
-        total_pnl: float,
-        avg_win: float,
-        avg_loss: float,
-        sharpe: float,
-        best_day: float,
-        worst_day: float
-    ):
-        """Send weekly performance report"""
-        win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
-        emoji = "📊"
-        sign = "+" if total_pnl >= 0 else ""
-        
-        message = (
-            f"Trades: {total_trades} ({wins}W / {losses}L)\n"
-            f"Win Rate: {win_rate:.0f}%\n"
-            f"P&L: {sign}${total_pnl:.2f}\n"
-            f"Avg Win: +${avg_win:.2f}\n"
-            f"Avg Loss: -${abs(avg_loss):.2f}\n"
-            f"Sharpe: {sharpe:.2f}\n"
-            f"Best Day: +${best_day:.2f}\n"
-            f"Worst Day: -${abs(worst_day):.2f}"
-        )
+        pnl_emoji = "🟢" if pnl >= 0 else "🔴"
+        trend_emoji = "📈" if pnl >= 0 else "📉"
         
         return self.send(
-            message=message,
-            title=f"{emoji} Weekly Report",
-            priority=NotificationPriority.NORMAL,
-            sound="classical"
+            title=f"{trend_emoji} {symbol} Daily Summary",
+            message=f"Trades: {trades}\nWins: {wins} ({win_rate:.0f}%)\nP&L: {pnl_emoji} ${pnl:,.2f}",
+            priority=0,
+            sound=self.SOUNDS['summary']
         )
     
-    def drawdown_alert(self, current_drawdown: float, peak_balance: float, current_balance: float):
+    def drawdown_alert(self, current_drawdown: float, threshold: float, symbol: str = "BOT") -> bool:
         """Alert when drawdown exceeds threshold"""
         return self.send(
-            message=(
-                f"Drawdown: {current_drawdown:.1f}%\n"
-                f"Peak: ${peak_balance:,.2f}\n"
-                f"Current: ${current_balance:,.2f}\n"
-                f"Loss: ${peak_balance - current_balance:,.2f}"
-            ),
-            title="🔻 Drawdown Alert",
-            priority=NotificationPriority.HIGH,
-            sound="falling"
-        )
-    
-    def buying_power_warning(self, available: float, required: float):
-        """Notify on insufficient buying power"""
-        return self.send(
-            message=f"Available: ${available:,.2f}\nRequired: ${required:,.2f}\nShortfall: ${required - available:,.2f}",
-            title="💳 Insufficient Funds",
-            priority=NotificationPriority.HIGH,
-            sound="intermission"
+            title=f"🚨 {symbol} Drawdown Alert",
+            message=f"Current: {current_drawdown:.1f}%\nThreshold: {threshold:.1f}%",
+            priority=2,  # High priority
+            sound=self.SOUNDS['error']
         )
 
 
 class DiscordNotifier:
     """Send notifications via Discord webhook"""
     
-    def __init__(
-        self,
-        webhook_url: Optional[str] = None,
-        enabled: bool = True
-    ):
-        self.webhook_url = webhook_url or os.getenv('DISCORD_WEBHOOK_URL', '')
-        self.enabled = enabled and bool(self.webhook_url)
-        
-        if enabled and not self.enabled:
-            logger.warning("Discord notifications disabled - missing DISCORD_WEBHOOK_URL")
+    # Color codes for embeds
+    COLORS = {
+        'green': 0x00FF00,
+        'red': 0xFF0000,
+        'blue': 0x0099FF,
+        'yellow': 0xFFCC00,
+        'purple': 0x9900FF
+    }
     
-    def send(
-        self,
-        message: str,
-        title: Optional[str] = None,
-        color: int = 0x00FF00,  # Green by default
-        **kwargs  # Accept extra kwargs for compatibility
-    ) -> bool:
-        """
-        Send a Discord notification via webhook.
+    def __init__(self, webhook_url: str = None):
+        self.webhook_url = webhook_url or os.getenv('DISCORD_WEBHOOK_URL')
+        self.enabled = bool(self.webhook_url)
         
-        Args:
-            message: The notification message
-            title: Optional title for the embed
-            color: Embed color (hex int)
-            
-        Returns:
-            True if sent successfully, False otherwise
-        """
+        if self.enabled:
+            logger.info(f"Discord notifications enabled (webhook configured)")
+        else:
+            logger.debug("Discord webhook not configured - set DISCORD_WEBHOOK_URL")
+    
+    def send(self, title: str, message: str, color: int = None, **kwargs) -> bool:
+        """Send a Discord embed message"""
         if not self.enabled:
-            logger.debug(f"Discord notification skipped (disabled): {message}")
             return False
         
+        # Auto-determine color from title
+        if color is None:
+            title_lower = title.lower()
+            if any(w in title_lower for w in ['profit', 'win', 'started', '🟢', '💰']):
+                color = self.COLORS['green']
+            elif any(w in title_lower for w in ['loss', 'error', 'stopped', '🔴', 'alert']):
+                color = self.COLORS['red']
+            elif any(w in title_lower for w in ['signal', '📈', '📉']):
+                color = self.COLORS['purple']
+            else:
+                color = self.COLORS['blue']
+        
+        embed = {
+            "title": title,
+            "description": message,
+            "color": color,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
         try:
-            # Create embed for nicer formatting
-            embed = {
-                "description": message,
-                "color": color
-            }
-            
-            if title:
-                embed["title"] = title
-            
-            data = {
-                "embeds": [embed]
-            }
-            
             response = requests.post(
                 self.webhook_url,
-                json=data,
+                json={"embeds": [embed]},
                 timeout=10
             )
-            response.raise_for_status()
-            
-            logger.debug(f"Discord notification sent: {title or 'Notification'}")
-            return True
-            
+            if response.status_code in [200, 204]:
+                logger.debug(f"Discord notification sent: {title}")
+                return True
+            else:
+                logger.warning(f"Discord error: {response.status_code} - {response.text}")
+                return False
         except Exception as e:
-            logger.error(f"Failed to send Discord notification: {e}")
+            logger.error(f"Discord notification failed: {e}")
             return False
 
 
 class MultiNotifier:
-    """Send notifications to multiple services (Pushover + Discord)"""
-    
-    # Discord embed colors
-    COLOR_GREEN = 0x00FF00   # Success/profit
-    COLOR_RED = 0xFF0000     # Error/loss
-    COLOR_BLUE = 0x0099FF    # Info
-    COLOR_YELLOW = 0xFFCC00  # Warning
-    COLOR_PURPLE = 0x9900FF  # Signal
+    """Send to multiple notification services"""
     
     def __init__(self):
         self.pushover = PushoverNotifier()
         self.discord = DiscordNotifier()
-        
-        # Log status
-        logger.info(f"Pushover enabled: {self.pushover.enabled}")
-        logger.info(f"Discord enabled: {self.discord.enabled}")
     
-    @property
-    def enabled(self):
-        """Returns True if at least one notifier is enabled"""
-        return self.pushover.enabled or self.discord.enabled
-    
-    def send(
-        self,
-        message: str,
-        title: Optional[str] = None,
-        sound: Optional[str] = None,
-        color: Optional[int] = None,
-        **kwargs
-    ) -> bool:
-        """
-        Send notification to all enabled services.
-        
-        Args:
-            message: The notification message
-            title: Optional title
-            sound: Pushover sound (ignored by Discord)
-            color: Discord embed color (ignored by Pushover)
-            
-        Returns:
-            True if at least one notification succeeded
-        """
+    def send(self, title: str, message: str, **kwargs) -> bool:
+        """Send to all configured services"""
         results = []
         
-        # Determine Discord color from title if not specified
-        if color is None:
-            if title:
-                if any(x in title for x in ['Error', '❌', '⚠️']):
-                    color = self.COLOR_RED
-                elif any(x in title for x in ['Started', 'Signal', '📈', '📉']):
-                    color = self.COLOR_PURPLE
-                elif any(x in title for x in ['Stopped', 'Complete', '💰', '✓']):
-                    color = self.COLOR_GREEN
-                elif any(x in title for x in ['Summary', '📊']):
-                    color = self.COLOR_BLUE
-                else:
-                    color = self.COLOR_BLUE
-            else:
-                color = self.COLOR_BLUE
-        
-        # Send to Pushover
         if self.pushover.enabled:
-            results.append(self.pushover.send(
-                message=message,
-                title=title,
-                sound=sound,
-                **kwargs
-            ))
+            results.append(self.pushover.send(title, message, **kwargs))
         
-        # Send to Discord
         if self.discord.enabled:
-            results.append(self.discord.send(
-                message=message,
-                title=title,
-                color=color
-            ))
+            results.append(self.discord.send(title, message, **kwargs))
         
         return any(results)
     
-    # Convenience methods - delegate to send() with appropriate styling
+    def _send_to_all(self, title: str, message: str, **kwargs) -> bool:
+        """Helper to send formatted notification to all services"""
+        results = []
+        
+        if self.pushover.enabled:
+            results.append(self.pushover.send(title, message, **kwargs))
+        
+        if self.discord.enabled:
+            results.append(self.discord.send(title, message))
+        
+        return any(results)
     
-    def signal_alert(self, signal_type: str, direction: str, price: float, symbol: str = "SPY"):
-        emoji = "📈" if direction == "LONG" else "📉"
-        color = self.COLOR_GREEN if direction == "LONG" else self.COLOR_RED
-        return self.send(
-            message=f"{direction} @ ${price:.2f}\n{signal_type}",
-            title=f"{emoji} {symbol} Signal",
-            sound="cashregister",
-            color=color
-        )
+    # =========================================================================
+    # Convenience Methods - Send to ALL configured services
+    # =========================================================================
     
-    def trade_executed(self, direction: str, symbol: str, option_symbol: str, price: float, quantity: int):
-        emoji = "🟢" if direction == "LONG" else "🔴"
-        color = self.COLOR_GREEN if direction == "LONG" else self.COLOR_RED
-        return self.send(
-            message=f"{direction} {quantity}x {option_symbol}\n@ ${price:.2f}",
-            title=f"{emoji} Trade Executed",
-            sound="bugle",
-            color=color
-        )
+    def bot_started(self, mode: str, symbol: str) -> bool:
+        """Notification when bot starts"""
+        title = f"🤖 {symbol} Bot Started"
+        message = f"Mode: {mode}\nSymbol: {symbol}\nTime: {datetime.now().strftime('%H:%M:%S')}"
+        return self._send_to_all(title, message, priority=-1, sound='bike')
     
-    def trade_closed(self, direction: str, pnl: float, pnl_percent: float, reason: str):
-        emoji = "💰" if pnl >= 0 else "💸"
-        sign = "+" if pnl >= 0 else ""
-        color = self.COLOR_GREEN if pnl >= 0 else self.COLOR_RED
-        return self.send(
-            message=f"P&L: {sign}${pnl:.2f} ({sign}{pnl_percent:.1f}%)\nReason: {reason}",
-            title=f"{emoji} Position Closed",
-            sound="magic" if pnl >= 0 else "falling",
-            color=color
-        )
+    def bot_stopped(self, trades: int, pnl: float, symbol: str = "BOT") -> bool:
+        """Notification when bot stops"""
+        pnl_emoji = "🟢" if pnl >= 0 else "🔴"
+        title = f"🛑 {symbol} Bot Stopped"
+        message = f"Trades: {trades}\nP&L: {pnl_emoji} ${pnl:,.2f}\nTime: {datetime.now().strftime('%H:%M:%S')}"
+        return self._send_to_all(title, message, priority=0, sound='gamelan')
     
-    def trade_rejected(self, reason: str, details: str = ""):
-        return self.send(
-            message=f"{reason}\n{details}" if details else reason,
-            title="❌ Trade Rejected",
-            sound="pushover",
-            color=self.COLOR_RED
-        )
+    def signal_alert(self, signal_type: str, direction: str, price: float, symbol: str) -> bool:
+        """Notification when signal is detected"""
+        emoji = "📈" if direction.upper() == "LONG" else "📉"
+        title = f"{emoji} {symbol} {direction} Signal"
+        message = f"Type: {signal_type}\nPrice: ${price:.2f}\nTime: {datetime.now().strftime('%H:%M:%S')}"
+        return self._send_to_all(title, message, priority=1, sound='cashregister')
     
-    def error_alert(self, error: str):
-        return self.send(
-            message=error[:500],
-            title="⚠️ Bot Error",
-            sound="siren",
-            color=self.COLOR_RED
-        )
+    def trade_executed(self, direction: str, symbol: str, option_symbol: str, 
+                       price: float, quantity: int) -> bool:
+        """Notification when trade is executed"""
+        emoji = "🟢" if direction.upper() == "LONG" else "🔴"
+        title = f"{emoji} {symbol} {direction} Trade Filled"
+        message = f"Option: {option_symbol}\nPrice: ${price:.2f}\nQty: {quantity}"
+        return self._send_to_all(title, message, priority=1, sound='bugle')
     
-    def bot_started(self, mode: str, symbol: str):
-        return self.send(
-            message=f"Mode: {mode}\nSymbol: {symbol}",
-            title="🤖 Bot Started",
-            sound="bike",
-            color=self.COLOR_BLUE
-        )
+    def trade_closed(self, direction: str, pnl: float, pnl_percent: float, 
+                     reason: str, symbol: str = "SPY") -> bool:
+        """Notification when trade is closed"""
+        if pnl >= 0:
+            emoji = "💰"
+            sound = 'magic'
+        else:
+            emoji = "📉"
+            sound = 'falling'
+        
+        title = f"{emoji} {symbol} Position Closed"
+        message = f"Direction: {direction}\nP&L: ${pnl:,.2f} ({pnl_percent:+.1f}%)\nReason: {reason}"
+        return self._send_to_all(title, message, priority=0, sound=sound)
     
-    def bot_stopped(self, trades: int, pnl: float):
-        sign = "+" if pnl >= 0 else ""
-        color = self.COLOR_GREEN if pnl >= 0 else self.COLOR_RED
-        return self.send(
-            message=f"Trades: {trades}\nP&L: {sign}${pnl:.2f}",
-            title="🛑 Bot Stopped",
-            sound="gamelan",
-            color=color
-        )
+    def trade_rejected(self, reason: str, details: str = "", symbol: str = "SPY") -> bool:
+        """Notification when trade is rejected"""
+        title = f"❌ {symbol} Trade Rejected"
+        message = f"Reason: {reason}\n{details}" if details else f"Reason: {reason}"
+        return self._send_to_all(title, message, priority=0, sound='pushover')
     
-    def daily_summary(self, trades: int, wins: int, pnl: float, symbol: str = "SPY"):
+    def error_alert(self, error: str, symbol: str = "BOT") -> bool:
+        """Notification for errors"""
+        title = f"⚠️ {symbol} Bot Error"
+        message = str(error)[:200]
+        return self._send_to_all(title, message, priority=1, sound='siren')
+    
+    def daily_summary(self, trades: int, wins: int, pnl: float, symbol: str) -> bool:
+        """End of day summary notification"""
         win_rate = (wins / trades * 100) if trades > 0 else 0
-        emoji = "📈" if pnl >= 0 else "📉"
-        sign = "+" if pnl >= 0 else ""
-        color = self.COLOR_GREEN if pnl >= 0 else self.COLOR_RED
-        return self.send(
-            message=f"Trades: {trades}\nWins: {wins} ({win_rate:.0f}%)\nP&L: {sign}${pnl:.2f}",
-            title=f"{emoji} {symbol} Daily Summary",
-            sound="classical",
-            color=color
-        )
+        pnl_emoji = "🟢" if pnl >= 0 else "🔴"
+        trend_emoji = "📈" if pnl >= 0 else "📉"
+        
+        title = f"{trend_emoji} {symbol} Daily Summary"
+        message = f"Trades: {trades}\nWins: {wins} ({win_rate:.0f}%)\nP&L: {pnl_emoji} ${pnl:,.2f}"
+        return self._send_to_all(title, message, priority=0, sound='classical')
     
-    def drawdown_alert(self, current_drawdown: float, peak_balance: float, current_balance: float):
-        return self.send(
-            message=(
-                f"Drawdown: {current_drawdown:.1f}%\n"
-                f"Peak: ${peak_balance:,.2f}\n"
-                f"Current: ${current_balance:,.2f}\n"
-                f"Loss: ${peak_balance - current_balance:,.2f}"
-            ),
-            title="🔻 Drawdown Alert",
-            sound="falling",
-            color=self.COLOR_RED
-        )
-    
-    def buying_power_warning(self, available: float, required: float):
-        return self.send(
-            message=f"Available: ${available:,.2f}\nRequired: ${required:,.2f}\nShortfall: ${required - available:,.2f}",
-            title="💳 Insufficient Funds",
-            sound="intermission",
-            color=self.COLOR_YELLOW
-        )
+    def drawdown_alert(self, current_drawdown: float, threshold: float, symbol: str = "BOT") -> bool:
+        """Alert when drawdown exceeds threshold"""
+        title = f"🚨 {symbol} Drawdown Alert"
+        message = f"Current: {current_drawdown:.1f}%\nThreshold: {threshold:.1f}%"
+        return self._send_to_all(title, message, priority=2, sound='siren')
 
 
-# Global notifier instance - use MultiNotifier for both Pushover + Discord
+# Singleton instance
 _notifier: Optional[MultiNotifier] = None
 
-
 def get_notifier() -> MultiNotifier:
-    """Get or create the global notifier instance"""
+    """Get the global notifier instance"""
     global _notifier
     if _notifier is None:
         _notifier = MultiNotifier()
     return _notifier
-
-
-def notify(message: str, title: str = None, **kwargs):
-    """Convenience function to send a notification"""
-    return get_notifier().send(message, title, **kwargs)
