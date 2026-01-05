@@ -273,6 +273,15 @@ class SignalDetector:
         if self.bars and bar.timestamp.date() != self.bars[-1].timestamp.date():
             self.reset_session()
         
+        # Reset cooldown at RTH open (9:30 AM) so globex signals don't suppress morning signals
+        bar_time = bar.timestamp.time()
+        prev_bar_time = self.bars[-1].timestamp.time() if self.bars else None
+        rth_open = time(9, 30)
+        
+        if prev_bar_time and prev_bar_time < rth_open <= bar_time:
+            self.bars_since_signal = 999
+            logger.info("RTH open - cooldown reset")
+        
         # Update session state
         self._update_session(bar)
         

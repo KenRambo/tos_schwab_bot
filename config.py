@@ -87,7 +87,7 @@ class TimeConfig:
     avoid_lunch_end: time = field(default_factory=lambda: time(13, 30))
     avoid_last_minutes: int = 15
     use_time_filter: bool = False
-    rth_only: bool = True
+    rth_only: bool = False
 
 
 @dataclass 
