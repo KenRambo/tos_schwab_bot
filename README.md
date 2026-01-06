@@ -1,1003 +1,1404 @@
-# ToS Signal Trading Bot
-
-A Python trading bot that replicates the signal logic from your ThinkOrSwim Auction Market Theory (AMT) indicator and automatically trades options via the Schwab API.
-
-**Supports:**
-- SPY/QQQ single-leg options (calls/puts)
-- **ES futures signals → SPX butterfly credit spreads** (new!)
-- Multi-symbol daemon mode
-
-## 🎯 Latest Optimization Results (January 2026)
-
-**Variant A (Aggressive) - Best Single Run:**
-| Metric | Value |
-|--------|-------|
-| Win Rate | 72.6% |
-| Total P&L | $274,048 |
-| Trades | 62 |
-| Profit Factor | 3.25 |
-| Sharpe Ratio | 5.58 |
-| Max Drawdown | $32,715 |
-
-**Key Finding:** Enabling short signals (VAH rejection + breakdown) increased P&L by 2.5x compared to long-only strategy.
-
-## 🦋 Butterfly Credit Spread Mode (New!)
-
-Trade SPX/XSP butterfly credit spreads based on ES futures signals:
-
-```bash
-# Quick start - ES signals → SPX butterflies (paper mode)
-./bot.sh butterfly
-
-# Live trading
-./bot.sh butterfly /ES SPX --live
-
-# Manual flags
-python trading_bot.py --symbol /ES --execution-symbol SPX --butterfly
-```
-
-**How it works:**
-- Watches /ES futures for AMT signals (VAL bounce, VAH rejection, etc.)
-- On LONG signal → Opens call butterfly on SPX
-- On SHORT signal → Opens put butterfly on SPX
-- Collects credit on each butterfly for "credit stacking" strategy
-
-## 📊 Gamma Exposure Filter (New!)
-
-Filters signals based on dealer gamma positioning to avoid trading against market makers:
-
-| Gamma Regime | Dealer Position | Market Behavior | Signal Filtering |
-|--------------|-----------------|-----------------|------------------|
-| **Positive** (above ZG) | Long gamma | Mean reversion | ✅ VAL/VAH signals, ❌ Breakouts blocked |
-| **Neutral** (near ZG) | Mixed | Choppy | ✅ All signals allowed |
-| **Negative** (below ZG) | Short gamma | Trending/momentum | ✅ All signals, ⚠️ Fades risky |
-
-**How it works:**
-- Calculates Zero Gamma (ZG) level based on today's open price
-- ZG anchors near open early in day, drifts toward current price as day progresses
-- Above ZG = dealers fade moves (mean reversion works)
-- Below ZG = dealers chase moves (momentum works)
-
-```bash
-# Gamma filter enabled by default
-./bot.sh start /ES -e SPX --butterfly
-
-# Disable gamma filter
-./bot.sh start /ES -e SPX --butterfly --no-gamma
-```
-
-**Log output:**
-```
-  Gamma: 🟢 POSITIVE | ZG: $6955 | Bias: FADE MOVES
-  Levels: PUT₁ $6930 | ZG $6955 | CALL₁ $6980
-  Price vs ZG: $6968.75 (+13.75)
-```
-
-## 🔧 Recent Bug Fixes (January 6, 2026)
-
-| Bug | Symptom | Fix |
-|-----|---------|-----|
-| **VA off by ~$6** | Bot VAH didn't match ToS | StdDev now uses last 20 bars only |
-| **Cross-session pollution** | Wild VA early session | `reset_session()` clears bars deque |
-| **Signals firing when disabled** | SUSTAINED_BREAKOUT despite config | Signal enable flags passed to detector |
-| **OR bias buffer zone** | Wrong bias in buffer zone | Added explicit `else` clause for NEUTRAL |
-| **Globex suppressing RTH** | Morning signals blocked | RTH cooldown reset at 9:30 AM |
-| **VIX=0 during globex** | Wrong cooldown (15 vs 17) | Treat VIX≤0 as unavailable |
-| **Price $0.00 on signals** | Invalid quote price | Validate price before live bar update |
-
-## Overview
-
-This bot monitors SPY price action, detects the same signals your ToS indicator generates, and automatically executes trades:
-
-- **LONG Signal** → Buy SPY CALL at target delta (default 0.67Δ ATM)
-- **SHORT Signal** → Buy SPY PUT at target delta
-
-The bot implements your "hold until opposite signal" strategy - positions are held until an opposite direction signal fires.
-
-## Features
-
-### Trading Modes
-
-**Single-Leg Options (Default):**
-- LONG Signal → Buy CALL at target delta (default 0.67Δ)
-- SHORT Signal → Buy PUT at target delta
-- Hold until opposite signal fires
-
-**Butterfly Credit Spreads (`--butterfly`):**
-- LONG Signal → Call butterfly (buy lower/upper, sell 2× middle)
-- SHORT Signal → Put butterfly (buy lower/upper, sell 2× middle)
-- Collect net credit on each trade ("credit stacking")
-- Supports SPX ($5 strikes) and XSP ($1 strikes)
-
-### Signal Detection (Matching Your ToS Indicator)
-
-**Long Signals:**
-- ✅ VAL Bounce - Price touches Value Area Low and bounces with volume
-- ❌ POC Reclaim - Disabled (noisy)
-- ❌ Breakout - Disabled by optimizer
-- ❌ Sustained Breakout - Disabled
-
-**Short Signals:**
-- ✅ VAH Rejection - Price touches Value Area High and rejects with volume
-- ❌ POC Breakdown - Disabled (noisy)
-- ✅ Breakdown - Accepted below VAL for confirmation bars
-- ❌ Sustained Breakdown - Disabled
-
-### Filters (Matching Your ToS Settings)
-
-- **Opening Range Bias Filter** - Only takes signals aligned with first 30-minute direction
-- **RTH Only** - Signals only during regular trading hours (9:30 AM - 4:00 PM ET)
-- **RTH Cooldown Reset** - Globex signals don't suppress morning signals
-- **Signal Cooldown** - 17 bars (~85 min on 5-min chart) between signals
-- **Daily Trade Limit** - Maximum 6 trades per day
-- **VIX Regime** - Adjusts cooldown based on volatility (handles VIX=0 gracefully)
-- **Gamma Exposure Filter** - Blocks breakouts in positive gamma, warns on fades in negative gamma
-
-### Symbol Mapping
-
-Trade options on a different symbol than your signal source:
-
-```bash
-# Watch /ES futures, trade SPX options
-python trading_bot.py --symbol /ES --execution-symbol SPX
-
-# Watch /NQ futures, trade QQQ options  
-python trading_bot.py --symbol /NQ --execution-symbol QQQ
-```
-
-### Option Selection
-
-- **High Delta Targeting** - Select ATM options (0.67Δ morning, 0.83Δ afternoon)
-- **0DTE Support** - Automatically handles same-day expiration
-- Configurable DTE range (0-7 days)
-
-### Position Sizing & Risk Management
-
-- **Fixed Fractional Sizing** - Size positions based on account balance
-- **Trailing Stop** - 21% trail with 32% activation threshold
-- **Daily Loss Limit** - Stop trading if daily loss exceeds $500 or 5% of account
-- **Delta Exposure Check** - Prevents overexposure by limiting total delta
-- **Max Position Size** - Hard cap on contracts (default: 99)
-
-### Monitoring & Analytics
-
-- **Daily P&L Summary** - Push notification at 4:15 PM ET with day's performance
-- **Weekly Report** - Win rate, avg win/loss, Sharpe ratio, best/worst day
-- **Drawdown Alerts** - Notification when down 10%+ from peak balance
-- Performance data persisted to JSON for historical tracking
-
-### Push Notifications (Pushover)
-
-Get mobile alerts for:
-- 🤖 Bot started/stopped
-- 📈📉 Signal detected
-- 🟢🔴 Trade executed
-- 💰💸 Position closed (with P&L)
-- 🦋 Butterfly filled (with credit collected)
-- 🦋 Butterfly rejected
-- 💳 Insufficient buying power
-- 🔻 Drawdown alert
-- 📊 Daily/weekly summaries
-
-## Installation
-
-### 1. Clone the Repository
-
-```bash
-git clone https://github.com/KenRambo/tos_schwab_bot.git
-cd tos_schwab_bot
-```
-
-### 2. Install Dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-### 3. Get Schwab API Credentials
-
-1. Go to [Schwab Developer Portal](https://developer.schwab.com/)
-2. Create a new application
-3. Set callback URL to: `https://127.0.0.1:8182/callback`
-4. Note your App Key and App Secret
-
-### 4. Configure Environment
-
-```bash
-# Copy template
-cp .env.template .env
-
-# Edit with your credentials
-nano .env
-```
-
-```bash
-# Required
-SCHWAB_APP_KEY=your_app_key
-SCHWAB_APP_SECRET=your_app_secret
-
-# Optional - Push notifications
-PUSHOVER_USER_KEY=your_user_key
-PUSHOVER_API_TOKEN=your_api_token
-```
-
-### 5. Setup Pushover (Optional)
-
-1. Download Pushover app on iOS/Android ($5 one-time)
-2. Create account at [pushover.net](https://pushover.net)
-3. Get User Key from dashboard
-4. Create Application to get API Token
-5. Add to `.env` file
-
-## Usage
-
-### Quick Start
-
-```bash
-# SPY paper trading (default)
-python trading_bot.py
-
-# SPY live trading
-python trading_bot.py --live
-
-# ES signals → SPX butterflies
-python trading_bot.py --symbol /ES --execution-symbol SPX --butterfly
-```
-
-### CLI Options
-
-```bash
-python trading_bot.py [OPTIONS]
-
-Options:
-  --symbol, -s SYMBOL          Signal symbol to watch (default: SPY)
-  --execution-symbol, -e SYM   Trade options on this symbol instead
-  --butterfly                  Enable butterfly credit spread mode
-  --paper, -p                  Paper trading (default)
-  --live                       Live trading (requires confirmation)
-  --contracts, -c N            Contracts per trade
-  --max-trades, -m N           Max trades per day
-  --cooldown N                 Signal cooldown in bars
-  --no-gamma                   Disable gamma exposure filter
-  --no-confirm, -y             Skip confirmation (for daemons)
-  --log-file PATH              Custom log file
-```
-
-### Daemon Mode (Background)
-
-```bash
-# Standard trading
-./bot.sh start SPY                    # SPY paper trading
-./bot.sh start SPY --live             # SPY live trading
-./bot.sh start QQQ                    # QQQ paper trading
-
-# Butterfly mode (ES → SPX)
-./bot.sh butterfly                    # Paper mode (default)
-./bot.sh butterfly /ES SPX --live     # Live mode
-
-# Control
-./bot.sh stop SPY                     # Stop one bot
-./bot.sh stop-all                     # Stop all bots
-./bot.sh restart SPY                  # Restart
-./bot.sh status                       # Show running bots
-./bot.sh logs SPY                     # Follow logs
-```
-
-### Symbol Mapping Examples
-
-```bash
-# ES futures signals → SPX options
-python trading_bot.py -s /ES -e SPX
-
-# ES futures signals → SPX butterflies  
-python trading_bot.py -s /ES -e SPX --butterfly
-
-# NQ futures signals → QQQ options
-python trading_bot.py -s /NQ -e QQQ
-```
-
-### Interactive Mode
-
-```bash
-python trading_bot.py
-```
-
-On first run, the bot will:
-1. Open your browser for Schwab OAuth authentication
-2. After you log in, capture the callback token
-3. Save tokens for future sessions (auto-refresh)
-
-## Configuration
-
-Edit `config.py` to customize, or use the optimizer to generate optimized settings:
-
-```bash
-# Apply optimized config from Variant A results
-python apply_config_simple.py --from recommended_config_variant_a.json
-```
-
-### Optimized Trading Settings (Variant A)
-
-```python
-@dataclass
-class TradingConfig:
-    symbol: str = "SPY"
-    execution_symbol: str = None           # NEW: Trade options on different symbol
-    max_daily_trades: int = 6              # OPTIMIZED (was 3)
+"""
+ToS Signal Trading Bot - Main Application
+
+This bot monitors SPY for signals matching your ThinkOrSwim AMT indicator
+and automatically trades the nearest OTM SPY options via the Schwab API.
+
+Strategy: Hold until opposite signal
+- LONG signal -> Buy nearest OTM CALL
+- SHORT signal -> Close CALL, Buy nearest OTM PUT
+
+FIXED 2026-01-05:
+- Signal enable flags now passed from config to SignalDetector
+- VIX regime support added
+
+CLI Usage:
+    python trading_bot.py                           # Default (SPY)
+    python trading_bot.py --symbol QQQ              # Trade QQQ
+    python trading_bot.py --symbol IWM --paper      # Paper trade IWM
+    python trading_bot.py --symbol SPY -c 2 -m 5    # 2 contracts, max 5 trades
+    python trading_bot.py --help                    # Show all options
+"""
+from dotenv import load_dotenv
+load_dotenv()
+import os
+import sys
+import time
+import signal as sig
+import logging
+import argparse
+from datetime import datetime, time as dt_time, date, timedelta, timezone
+from typing import Optional, Dict, Any
+import json
+
+from config import BotConfig, config
+from schwab_auth import SchwabAuth
+from schwab_client import SchwabClient
+from signal_detector import SignalDetector, Signal, Bar, Direction
+from position_manager import PositionManager
+from notifications import get_notifier, PushoverNotifier
+from analytics import get_tracker, PerformanceTracker
+from gamma_context import GammaContext, GammaRegime
+
+# Eastern timezone
+try:
+    from zoneinfo import ZoneInfo
+    ET = ZoneInfo("America/New_York")
+except ImportError:
+    # Python < 3.9 fallback
+    ET = timezone(timedelta(hours=-5))  # EST (doesn't handle DST)
+
+def get_et_now():
+    """Get current time in Eastern"""
+    return datetime.now(ET)
+
+def format_et_time(dt=None):
+    """Format datetime as Eastern time string"""
+    if dt is None:
+        dt = get_et_now()
+    elif dt.tzinfo is None:
+        dt = dt.replace(tzinfo=ET)
+    return dt.strftime('%Y-%m-%d %H:%M:%S ET')
+
+# Setup logging with Eastern time
+class ETFormatter(logging.Formatter):
+    def formatTime(self, record, datefmt=None):
+        dt = datetime.fromtimestamp(record.created, tz=ET)
+        if datefmt:
+            return dt.strftime(datefmt)
+        return dt.strftime('%Y-%m-%d %H:%M:%S ET')
+
+logging.basicConfig(
+    level=logging.INFO,
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('trading_bot.log')
+    ]
+)
+# Apply ET formatter to all handlers
+et_formatter = ETFormatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+for handler in logging.root.handlers:
+    handler.setFormatter(et_formatter)
+
+logger = logging.getLogger(__name__)
+
+
+class TradingBot:
+    """
+    Main trading bot orchestrator.
     
-    # Butterfly Mode (for SPX/XSP credit stacking)
-    butterfly_mode: bool = False           # NEW: Enable with --butterfly
-    butterfly_wing_width: int = 5          # Points between strikes
-    butterfly_credit_target_pct: float = 0.30  # Target 30% credit
+    Monitors market data, detects signals, and executes trades.
+    """
     
-    # Option Selection - HIGH DELTA ATM
-    use_delta_targeting: bool = True
-    target_delta: float = 0.67             # OPTIMIZED - ATM calls/puts
-    afternoon_delta: float = 0.83          # OPTIMIZED - higher after noon
-    min_days_to_expiry: int = 0            # 0DTE
-    max_days_to_expiry: int = 0
+    def __init__(self, config: BotConfig):
+        self.config = config
+        self.running = False
+        
+        # Initialize components
+        self.auth: Optional[SchwabAuth] = None
+        self.client: Optional[SchwabClient] = None
+        self.detector: Optional[SignalDetector] = None
+        self.position_manager: Optional[PositionManager] = None
+        self.notifier: PushoverNotifier = get_notifier()
+        self.tracker: PerformanceTracker = get_tracker()
+        
+        # State
+        self.last_bar_time: Optional[datetime] = None
+        self._last_processed_bar_time: Optional[datetime] = None  # Track actual bar timestamps
+        self.last_price: float = 0
+        self.bar_interval_seconds = 300  # 5-minute bars
+        
+        # Gamma context for signal filtering
+        self.gamma_context: Optional[GammaContext] = None
+        self._today_open_price: Optional[float] = None  # Track today's open for gamma calc
+        
+        # Intra-bar tracking
+        self._current_bar_period: Optional[int] = None  # Which 5-min period we're in
+        self._live_bar_open: Optional[float] = None
+        self._live_bar_high: Optional[float] = None
+        self._live_bar_low: Optional[float] = None
+        self._live_bar_volume: int = 0
+        self._live_bar_start: Optional[datetime] = None
+        self._signal_fired_this_bar: bool = False  # Prevent duplicate signals
+        self._last_intra_bar_check: Optional[datetime] = None
+        
+        # Metrics
+        self.bars_processed = 0
+        self.signals_generated = 0
+        self.trades_executed = 0
+        self.start_time: Optional[datetime] = None
     
-    # Position Sizing
-    use_fixed_fractional: bool = True
-    risk_percent_per_trade: float = 23.0   # OPTIMIZED (aggressive)
-    max_position_size: int = 99            # OPTIMIZED
+    def initialize(self) -> bool:
+        """Initialize all components"""
+        logger.info("Initializing Trading Bot...")
+        
+        try:
+            # Validate config
+            self.config.validate()
+            
+            # Setup authentication
+            self.auth = SchwabAuth(
+                app_key=self.config.schwab.app_key,
+                app_secret=self.config.schwab.app_secret,
+                redirect_uri=self.config.schwab.redirect_uri,
+                token_file=self.config.schwab.token_file
+            )
+            
+            # Check if we need to authenticate
+            if not self.auth.is_authenticated:
+                logger.info("No existing authentication - starting OAuth flow...")
+                if not self.auth.authorize_interactive():
+                    logger.error("Authentication failed")
+                    return False
+            else:
+                # Verify token is still valid
+                if not self.auth.refresh_access_token():
+                    logger.info("Token refresh failed - re-authenticating...")
+                    if not self.auth.authorize_interactive():
+                        logger.error("Re-authentication failed")
+                        return False
+            
+            # Initialize API client
+            self.client = SchwabClient(self.auth)
+            
+            # Verify account access
+            account_hash = self.client.get_account_hash()
+            logger.info(f"Connected to account: {account_hash[:8]}...")
+            
+            # Initialize signal detector with ALL config values including signal enables
+            # FIXED: Now passes all enable flags from config
+            self.detector = SignalDetector(
+                length_period=self.config.signal.length_period,
+                value_area_percent=self.config.signal.value_area_percent,
+                volume_threshold=self.config.signal.volume_threshold,
+                use_relaxed_volume=self.config.signal.use_relaxed_volume,
+                min_confirmation_bars=self.config.signal.min_confirmation_bars,
+                sustained_bars_required=self.config.signal.sustained_bars_required,
+                signal_cooldown_bars=self.config.signal.signal_cooldown_bars,
+                use_or_bias_filter=self.config.signal.use_or_bias_filter,
+                or_buffer_points=self.config.signal.or_buffer_points,
+                use_time_filter=self.config.time.use_time_filter,
+                rth_only=self.config.time.rth_only,
+                # VIX Regime settings - FIXED: Now passed from config
+                use_vix_regime=self.config.signal.use_vix_regime,
+                vix_high_threshold=self.config.signal.vix_high_threshold,
+                vix_low_threshold=self.config.signal.vix_low_threshold,
+                high_vol_cooldown_mult=self.config.signal.high_vol_cooldown_mult,
+                low_vol_cooldown_mult=self.config.signal.low_vol_cooldown_mult,
+                # Signal enable flags - FIXED: These were missing before!
+                enable_val_bounce=self.config.signal.enable_val_bounce,
+                enable_poc_reclaim=self.config.signal.enable_poc_reclaim,
+                enable_breakout=self.config.signal.enable_breakout,
+                enable_sustained_breakout=self.config.signal.enable_sustained_breakout,
+                enable_prior_val_bounce=self.config.signal.enable_prior_val_bounce,
+                enable_prior_poc_reclaim=self.config.signal.enable_prior_poc_reclaim,
+                enable_vah_rejection=self.config.signal.enable_vah_rejection,
+                enable_poc_breakdown=self.config.signal.enable_poc_breakdown,
+                enable_breakdown=self.config.signal.enable_breakdown,
+                enable_sustained_breakdown=self.config.signal.enable_sustained_breakdown,
+                enable_prior_vah_rejection=self.config.signal.enable_prior_vah_rejection,
+                enable_prior_poc_breakdown=self.config.signal.enable_prior_poc_breakdown
+            )
+            
+            # Initialize position manager
+            # Use option_symbol for execution (either execution_symbol if set, or signal symbol)
+            option_symbol = self.config.trading.option_symbol
+            self.position_manager = PositionManager(
+                client=self.client,
+                symbol=option_symbol,  # This is the symbol for option trading
+                contracts=self.config.trading.contracts,
+                max_daily_trades=self.config.trading.max_daily_trades,
+                min_dte=self.config.trading.min_days_to_expiry,
+                max_dte=self.config.trading.max_days_to_expiry,
+                paper_trading=self.config.paper_trading,
+                # Delta targeting
+                use_delta_targeting=self.config.trading.use_delta_targeting,
+                target_delta=self.config.trading.target_delta,
+                afternoon_delta=self.config.trading.afternoon_delta,
+                afternoon_start_hour=self.config.trading.afternoon_start_hour,
+                # Risk management settings
+                enable_stop_loss=self.config.trading.enable_stop_loss,
+                stop_loss_percent=self.config.trading.stop_loss_percent,
+                stop_loss_dollars=self.config.trading.stop_loss_dollars,
+                enable_take_profit=self.config.trading.enable_take_profit,
+                take_profit_percent=self.config.trading.take_profit_percent,
+                take_profit_dollars=self.config.trading.take_profit_dollars,
+                enable_trailing_stop=self.config.trading.enable_trailing_stop,
+                trailing_stop_percent=self.config.trading.trailing_stop_percent,
+                trailing_stop_activation=self.config.trading.trailing_stop_activation,
+                # Fixed fractional position sizing
+                use_fixed_fractional=self.config.trading.use_fixed_fractional,
+                risk_percent_per_trade=self.config.trading.risk_percent_per_trade,
+                max_position_size=self.config.trading.max_position_size,
+                min_position_size=self.config.trading.min_position_size,
+                # Daily loss limit
+                enable_daily_loss_limit=self.config.trading.enable_daily_loss_limit,
+                max_daily_loss_dollars=self.config.trading.max_daily_loss_dollars,
+                max_daily_loss_percent=self.config.trading.max_daily_loss_percent,
+                # Correlation / delta exposure
+                enable_correlation_check=self.config.trading.enable_correlation_check,
+                max_delta_exposure=self.config.trading.max_delta_exposure,
+                # Butterfly mode
+                butterfly_mode=self.config.trading.butterfly_mode,
+                butterfly_wing_width=self.config.trading.butterfly_wing_width,
+                butterfly_credit_target_pct=self.config.trading.butterfly_credit_target_pct
+            )
+            
+            # Log if using symbol mapping
+            if self.config.trading.execution_symbol:
+                logger.info(f"Symbol mapping: {self.config.trading.symbol} signals → {option_symbol} options")
+            
+            # Initialize gamma context for signal filtering
+            self.gamma_context: Optional[GammaContext] = None
+            if self.config.signal.use_gamma_filter:
+                self.gamma_context = GammaContext(
+                    symbol=self.config.trading.symbol,
+                    enable_filtering=True,
+                    neutral_zone_points=self.config.signal.gamma_neutral_zone,
+                    strike_width=self.config.signal.gamma_strike_width
+                )
+                logger.info("Gamma context initialized - signal filtering enabled")
+            
+            # Sync with broker if live trading
+            if not self.config.paper_trading:
+                self.position_manager.sync_with_broker()
+            
+            # Initialize performance tracker with settings
+            from datetime import time as dt_time
+            self.tracker.enable_daily_summary = self.config.analytics.enable_daily_summary
+            self.tracker.enable_weekly_report = self.config.analytics.enable_weekly_report
+            self.tracker.enable_drawdown_alerts = self.config.analytics.enable_drawdown_alerts
+            self.tracker.drawdown_alert_threshold = self.config.analytics.drawdown_alert_threshold
+            self.tracker.daily_summary_time = dt_time(
+                self.config.analytics.daily_summary_hour,
+                self.config.analytics.daily_summary_minute
+            )
+            self.tracker.data_file = self.config.analytics.performance_data_file
+            
+            # Set starting balance
+            try:
+                starting_balance = self.client.get_buying_power()
+                self.tracker.set_starting_balance(starting_balance)
+                self.tracker.new_trading_day()
+            except Exception as e:
+                logger.warning(f"Could not initialize tracker balance: {e}")
+            
+            logger.info("Bot initialized successfully")
+            logger.info(f"Mode: {'PAPER TRADING' if self.config.paper_trading else 'LIVE TRADING'}")
+            logger.info(f"Symbol: {self.config.trading.symbol}")
+            logger.info(f"Max daily trades: {self.config.trading.max_daily_trades}")
+            
+            # Log enabled signals
+            logger.info("Enabled signals:")
+            logger.info(f"  LONG: VAL_BOUNCE={self.config.signal.enable_val_bounce}, "
+                       f"POC_RECLAIM={self.config.signal.enable_poc_reclaim}, "
+                       f"BREAKOUT={self.config.signal.enable_breakout}, "
+                       f"SUSTAINED_BREAKOUT={self.config.signal.enable_sustained_breakout}")
+            logger.info(f"  SHORT: VAH_REJECTION={self.config.signal.enable_vah_rejection}, "
+                       f"POC_BREAKDOWN={self.config.signal.enable_poc_breakdown}, "
+                       f"BREAKDOWN={self.config.signal.enable_breakdown}, "
+                       f"SUSTAINED_BREAKDOWN={self.config.signal.enable_sustained_breakdown}")
+            
+            # Log filter status
+            logger.info("Filters:")
+            logger.info(f"  OR Bias Filter: {self.config.signal.use_or_bias_filter}")
+            logger.info(f"  VIX Regime: {self.config.signal.use_vix_regime}")
+            logger.info(f"  Gamma Filter: {self.config.signal.use_gamma_filter}"
+                       + (f" (neutral zone: ±{self.config.signal.gamma_neutral_zone}pts)" 
+                          if self.config.signal.use_gamma_filter else ""))
+            
+            # Load historical bars to initialize detector
+            self._load_historical_bars()
+            
+            # Log initial market state
+            self._log_initial_state()
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Initialization failed: {e}")
+            return False
     
-    # Trailing Stop (always enabled)
-    enable_trailing_stop: bool = True
-    trailing_stop_percent: float = 21.0    # OPTIMIZED
-    trailing_stop_activation: float = 32.0 # OPTIMIZED
+    def _load_historical_bars(self):
+        """Load historical bars to initialize the signal detector - FULL DAY from 9:30 AM"""
+        try:
+            from datetime import datetime, timedelta
+            import pytz
+            
+            et = pytz.timezone('US/Eastern')
+            now_et = datetime.now(et)
+            
+            # Calculate bars needed from 9:30 AM today to now
+            market_open = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
+            
+            if now_et < market_open:
+                # Before market open - load previous day's data
+                logger.info("Before market open - loading previous day data")
+                num_bars = 100
+            else:
+                # Calculate how many 5-min bars since market open
+                minutes_since_open = (now_et - market_open).total_seconds() / 60
+                num_bars = int(minutes_since_open / 5) + 10  # +10 for buffer
+                num_bars = max(num_bars, 100)  # At least 100 bars
+                logger.info(f"Market open, loading {num_bars} bars to cover full day from 9:30 AM")
+            
+            logger.info(f"Loading last {num_bars} bars to initialize detector...")
+            
+            bars = self.client.get_recent_bars(
+                symbol=self.config.trading.symbol,
+                num_bars=num_bars,
+                bar_minutes=5,
+                extended_hours=False  # RTH only for cleaner data
+            )
+            
+            if not bars:
+                logger.warning("No historical bars available - starting fresh")
+                return
+            
+            logger.info(f"Loaded {len(bars)} historical bars")
+            
+            # Filter to only TODAY's bars for proper state initialization
+            today = date.today()
+            todays_bars = [b for b in bars if b['datetime'].date() == today]
+            
+            if todays_bars:
+                logger.info(f"Found {len(todays_bars)} bars from today (filtering out prior days)")
+                bars_to_process = todays_bars
+            else:
+                logger.warning("No bars from today found - using all historical bars")
+                bars_to_process = bars
+            
+            # Check if we have OR period bars (9:30 - 10:00 AM)
+            or_bars = [b for b in bars_to_process if b['datetime'].date() == today 
+                       and b['datetime'].hour == 9 and b['datetime'].minute >= 30]
+            or_bars += [b for b in bars_to_process if b['datetime'].date() == today 
+                        and b['datetime'].hour == 10 and b['datetime'].minute == 0]
+            
+            if or_bars:
+                logger.info(f"Found {len(or_bars)} Opening Range bars from today")
+            else:
+                logger.warning("No Opening Range bars found - OR bias may be incorrect")
+            
+            # Feed bars to detector WITH suppress_signals=True
+            # This builds up the value area context without triggering trades
+            for bar_data in bars_to_process:
+                bar = Bar(
+                    timestamp=bar_data['datetime'],
+                    open=bar_data['open'],
+                    high=bar_data['high'],
+                    low=bar_data['low'],
+                    close=bar_data['close'],
+                    volume=bar_data['volume']
+                )
+                self.detector.add_bar(bar, suppress_signals=True)
+            
+            # Get state after initialization
+            state = self.detector.get_state_summary()
+            
+            logger.info("")
+            logger.info("╔════════════════════════════════════════════════════════════╗")
+            logger.info("║          DETECTOR INITIALIZED WITH HISTORICAL DATA         ║")
+            logger.info("╠════════════════════════════════════════════════════════════╣")
+            logger.info(f"║  Bars Loaded:  {len(bars_to_process):<43}║")
+            logger.info(f"║  Time Range:   {bars_to_process[0]['datetime'].strftime('%H:%M')} - {bars_to_process[-1]['datetime'].strftime('%H:%M')} ET{' ' * 32}║")
+            
+            if state['vah'] > 0:
+                logger.info("╠════════════════════════════════════════════════════════════╣")
+                logger.info(f"║  VAH:  ${state['vah']:<9.2f}                                      ║")
+                logger.info(f"║  POC:  ${state['poc']:<9.2f}                                      ║")
+                logger.info(f"║  VAL:  ${state['val']:<9.2f}                                      ║")
+            else:
+                logger.info("║  Value Area:   Still building...                          ║")
+            
+            # Show bars_above_vah state
+            logger.info("╠════════════════════════════════════════════════════════════╣")
+            logger.info(f"║  Bars Above VAH: {state.get('bars_above_vah', 0):<41}║")
+            logger.info(f"║  Bars Below VAL: {state.get('bars_below_val', 0):<41}║")
+            
+            if state['or_complete']:
+                import math
+                if state['or_low'] > 0 and not math.isinf(state['or_high']):
+                    logger.info("╠════════════════════════════════════════════════════════════╣")
+                    logger.info(f"║  OR Low:   ${state['or_low']:<9.2f}                                  ║")
+                    logger.info(f"║  OR High:  ${state['or_high']:<9.2f}                                  ║")
+                    logger.info(f"║  OR Bias:  {state['or_bias']:<47}║")
+            else:
+                logger.info("║  Opening Range: Not yet complete                          ║")
+            
+            logger.info("╠════════════════════════════════════════════════════════════╣")
+            logger.info("║  ✓ Signals suppressed during historical load               ║")
+            logger.info("║  ✓ Will only trade on NEW bars going forward               ║")
+            logger.info("╚════════════════════════════════════════════════════════════╝")
+            logger.info("")
+            
+            # Set last processed bar time to the last historical bar
+            # This prevents re-processing the same bar
+            # Normalize to naive datetime for consistent comparison
+            last_bar_ts = bars_to_process[-1]['datetime']
+            self._last_processed_bar_time = last_bar_ts.replace(tzinfo=None) if last_bar_ts.tzinfo else last_bar_ts
+            logger.info(f"Last historical bar: {self._last_processed_bar_time.strftime('%Y-%m-%d %H:%M:%S')}")
+            logger.info("Will only process bars AFTER this timestamp")
+            logger.info("")
+            
+            # Scan historical bars for missed signals
+            self._scan_for_missed_signals(bars_to_process)
+            
+        except Exception as e:
+            logger.warning(f"Could not load historical bars: {e}")
+            logger.info("Starting fresh - detector will build state from live data")
     
-    # Stop Loss / Take Profit
-    enable_stop_loss: bool = False         # OPTIMIZED - use trailing instead
-    enable_take_profit: bool = False
-```
-
-### Optimized Signal Settings
-
-```python
-@dataclass
-class SignalConfig:
-    length_period: int = 20
-    volume_threshold: float = 1.478        # OPTIMIZED (was 1.3)
-    use_relaxed_volume: bool = True
-    min_confirmation_bars: int = 2
-    sustained_bars_required: int = 5       # OPTIMIZED (was 3)
-    signal_cooldown_bars: int = 17         # OPTIMIZED (was 8) - ~85 min
-    use_or_bias_filter: bool = True
+    def _scan_for_missed_signals(self, bars_data: list):
+        """
+        Scan historical bars for signals that occurred while bot was offline.
+        Does NOT trade - just reports what was missed.
+        """
+        try:
+            from signal_detector import SignalDetector, Bar
+            
+            logger.info("")
+            logger.info("╔════════════════════════════════════════════════════════════╗")
+            logger.info("║          SCANNING FOR MISSED SIGNALS...                    ║")
+            logger.info("╚════════════════════════════════════════════════════════════╝")
+            
+            # Create a temporary detector with same settings
+            temp_detector = SignalDetector(
+                length_period=self.config.signal.length_period,
+                value_area_percent=self.config.signal.value_area_percent,
+                volume_threshold=self.config.signal.volume_threshold,
+                use_relaxed_volume=self.config.signal.use_relaxed_volume,
+                min_confirmation_bars=self.config.signal.min_confirmation_bars,
+                sustained_bars_required=self.config.signal.sustained_bars_required,
+                signal_cooldown_bars=self.config.signal.signal_cooldown_bars,
+                use_or_bias_filter=self.config.signal.use_or_bias_filter,
+                or_buffer_points=self.config.signal.or_buffer_points,
+                use_time_filter=self.config.time.use_time_filter,
+                rth_only=self.config.time.rth_only,
+                use_vix_regime=self.config.signal.use_vix_regime,
+                vix_high_threshold=self.config.signal.vix_high_threshold,
+                vix_low_threshold=self.config.signal.vix_low_threshold,
+                high_vol_cooldown_mult=self.config.signal.high_vol_cooldown_mult,
+                low_vol_cooldown_mult=self.config.signal.low_vol_cooldown_mult,
+                enable_val_bounce=self.config.signal.enable_val_bounce,
+                enable_poc_reclaim=self.config.signal.enable_poc_reclaim,
+                enable_breakout=self.config.signal.enable_breakout,
+                enable_sustained_breakout=self.config.signal.enable_sustained_breakout,
+                enable_prior_val_bounce=self.config.signal.enable_prior_val_bounce,
+                enable_prior_poc_reclaim=self.config.signal.enable_prior_poc_reclaim,
+                enable_vah_rejection=self.config.signal.enable_vah_rejection,
+                enable_poc_breakdown=self.config.signal.enable_poc_breakdown,
+                enable_breakdown=self.config.signal.enable_breakdown,
+                enable_sustained_breakdown=self.config.signal.enable_sustained_breakdown,
+                enable_prior_vah_rejection=self.config.signal.enable_prior_vah_rejection,
+                enable_prior_poc_breakdown=self.config.signal.enable_prior_poc_breakdown
+            )
+            
+            missed_signals = []
+            
+            # Process each bar and look for signals
+            for bar_data in bars_data:
+                bar = Bar(
+                    timestamp=bar_data['datetime'],
+                    open=bar_data['open'],
+                    high=bar_data['high'],
+                    low=bar_data['low'],
+                    close=bar_data['close'],
+                    volume=bar_data['volume']
+                )
+                
+                # Don't suppress signals - we want to find them
+                signal = temp_detector.add_bar(bar, suppress_signals=False)
+                
+                if signal:
+                    # Apply gamma filter if enabled
+                    gamma_blocked = False
+                    if self.gamma_context and self.config.signal.use_gamma_filter:
+                        # Update gamma context for this bar's time/price
+                        self.gamma_context.update(bar.close, bar.timestamp)
+                        allowed, reason = self.gamma_context.should_allow_signal(
+                            signal.signal_type.value,
+                            signal.direction.value
+                        )
+                        if not allowed:
+                            gamma_blocked = True
+                            signal.reason = f"{signal.reason} [BLOCKED BY GAMMA]"
+                    
+                    missed_signals.append({
+                        'signal': signal,
+                        'time': bar.timestamp,
+                        'gamma_blocked': gamma_blocked
+                    })
+            
+            # Report findings
+            if missed_signals:
+                logger.info("")
+                logger.info(f"⚠️  FOUND {len(missed_signals)} SIGNAL(S) WHILE OFFLINE:")
+                logger.info("")
+                
+                for i, ms in enumerate(missed_signals, 1):
+                    sig = ms['signal']
+                    time_str = ms['time'].strftime('%H:%M:%S ET')
+                    blocked_str = " [GAMMA BLOCKED]" if ms['gamma_blocked'] else ""
+                    emoji = "📈" if sig.direction.value == "LONG" else "📉"
+                    
+                    logger.info(f"  {i}. {emoji} {sig.signal_type.value} - {sig.direction.value} @ ${sig.price:.2f} ({time_str}){blocked_str}")
+                
+                # Highlight the most recent signal
+                most_recent = missed_signals[-1]
+                sig = most_recent['signal']
+                logger.info("")
+                logger.info("=" * 60)
+                
+                if most_recent['gamma_blocked']:
+                    logger.info(f"📊 MOST RECENT SIGNAL (blocked by gamma):")
+                    logger.info(f"   {sig.signal_type.value} - {sig.direction.value} @ ${sig.price:.2f}")
+                    logger.info(f"   Time: {most_recent['time'].strftime('%H:%M:%S ET')}")
+                    logger.info(f"   Status: Would have been blocked by gamma filter")
+                else:
+                    logger.info(f"🚨 MOST RECENT SIGNAL (MISSED):")
+                    logger.info(f"   {sig.signal_type.value} - {sig.direction.value} @ ${sig.price:.2f}")
+                    logger.info(f"   Time: {most_recent['time'].strftime('%H:%M:%S ET')}")
+                    logger.info(f"   VAH: ${sig.vah:.2f} | POC: ${sig.poc:.2f} | VAL: ${sig.val:.2f}")
+                    logger.info(f"   ⚠️  Consider manual entry if still valid!")
+                
+                logger.info("=" * 60)
+                logger.info("")
+                
+                # Send notification for missed signal
+                if not most_recent['gamma_blocked']:
+                    try:
+                        self.notifier.send(
+                            title=f"⚠️ Missed Signal: {sig.signal_type.value}",
+                            message=f"{sig.direction.value} @ ${sig.price:.2f}\nTime: {most_recent['time'].strftime('%H:%M ET')}\nBot was offline - consider manual entry",
+                            sound="intermission"
+                        )
+                    except:
+                        pass  # Notification failure shouldn't break startup
+            else:
+                logger.info("✓ No signals occurred while offline")
+                logger.info("")
+                
+        except Exception as e:
+            logger.warning(f"Could not scan for missed signals: {e}")
+            import traceback
+            traceback.print_exc()
     
-    # Signal Enables - OPTIMIZED
-    enable_val_bounce: bool = True         # Long dips
-    enable_vah_rejection: bool = True      # Short rallies
-    enable_breakdown: bool = True          # Short breakdowns
-    enable_breakout: bool = False          # DISABLED by optimizer
-    enable_poc_reclaim: bool = False       # Disabled - noisy
-    enable_poc_breakdown: bool = False     # Disabled - noisy
-    enable_sustained_breakout: bool = False  # DISABLED
-    enable_sustained_breakdown: bool = False # DISABLED
+    def _log_initial_state(self):
+        """Log initial market state on startup"""
+        try:
+            # Get the most recent bar from price history
+            bars = self.client.get_recent_bars(
+                symbol=self.config.trading.symbol,
+                num_bars=1,
+                bar_minutes=5,
+                extended_hours=True
+            )
+            
+            if not bars:
+                logger.warning("No bars available for initial state")
+                return
+            
+            bar = bars[-1]
+            
+            logger.info("")
+            logger.info("╔════════════════════════════════════════════════════════════╗")
+            logger.info("║                   INITIAL MARKET STATE                     ║")
+            logger.info("╠════════════════════════════════════════════════════════════╣")
+            logger.info(f"║  Symbol:     {self.config.trading.symbol:<45}║")
+            logger.info(f"║  Last Bar:   {bar['datetime'].strftime('%Y-%m-%d %H:%M ET'):<45}║")
+            logger.info("╠════════════════════════════════════════════════════════════╣")
+            logger.info(f"║  Open:       ${bar['open']:<44.2f}║")
+            logger.info(f"║  High:       ${bar['high']:<44.2f}║")
+            logger.info(f"║  Low:        ${bar['low']:<44.2f}║")
+            logger.info(f"║  Close:      ${bar['close']:<44.2f}║")
+            logger.info(f"║  Volume:     {bar['volume']:>12,}{' ' * 32}║")
+            logger.info("╠════════════════════════════════════════════════════════════╣")
+            logger.info(f"║  Time Now:   {format_et_time():<45}║")
+            logger.info("╚════════════════════════════════════════════════════════════╝")
+            logger.info("")
+            
+            self.last_price = bar['close']
+            
+        except Exception as e:
+            logger.warning(f"Could not fetch initial state: {e}")
     
-    # VIX Regime
-    use_vix_regime: bool = True            # OPTIMIZED
-    vix_high_threshold: int = 25
-    vix_low_threshold: int = 15
-    high_vol_cooldown_mult: float = 1.43   # Longer cooldown in high VIX
-    low_vol_cooldown_mult: float = 0.88    # Shorter cooldown in low VIX
+    def is_market_open(self) -> bool:
+        """Check if market is currently open"""
+        now = datetime.now()
+        current_time = now.time()
+        
+        # Check RTH hours
+        market_open = self.config.time.market_open
+        market_close = self.config.time.market_close
+        
+        if current_time < market_open or current_time >= market_close:
+            return False
+        
+        # Check weekday
+        if now.weekday() >= 5:  # Saturday = 5, Sunday = 6
+            return False
+        
+        return True
     
-    # Gamma Exposure Filter
-    use_gamma_filter: bool = True          # Filter based on dealer gamma
-    gamma_neutral_zone: float = 5.0        # Points from ZG to be neutral
-    gamma_strike_width: int = 5            # Strike rounding ($5 for SPX)
-```
-
-### Paper Trading vs Live Trading
-
-**Paper trading is the DEFAULT.** The bot won't place real orders unless you explicitly enable live mode.
-
-To trade live:
-
-```bash
-# CLI flag
-python trading_bot.py --live
-
-# Or edit config.py
-paper_trading = False
-
-# Daemon mode
-./bot.sh start SPY --live
-./bot.sh butterfly /ES SPX --live
-```
-
-When switching to live, you must type `CONFIRM` when prompted (or use `--no-confirm` for daemons).
-
-## File Structure
-
-```
-tos_schwab_bot/
-├── trading_bot.py       # Main bot application (supports --butterfly, --execution-symbol)
-├── config.py            # Configuration settings (auto-generated)
-├── signal_detector.py   # Signal detection logic
-├── position_manager.py  # Position/trade management (supports butterflies)
-├── gamma_context.py     # Gamma exposure calculations and filtering (NEW)
-├── schwab_auth.py       # OAuth2 authentication
-├── schwab_client.py     # Schwab API client
-├── notifications.py     # Pushover push notifications
-├── analytics.py         # Performance tracking & reporting
-│
-├── # Daemon Management
-├── bot.sh               # Multi-symbol daemon manager
-│
-├── # Optimization Tools
-├── optimizer_simple.py      # Simplified optimizer (high delta focus)
-├── optimizer_variant_a.py   # Variant A - Force shorts enabled
-├── optimizer_variant_b.py   # Variant B - Force VIX regime
-├── optimizer_variant_d.py   # Variant D - Short cooldown
-├── optimizer_multirun_simple.py  # Multi-run statistical analysis
-├── run_all_variants.py      # Run all variants with shared data cache
-├── apply_config_simple.py   # Apply optimized params to config.py
-├── backtest.py              # Backtesting module
-│
-├── # Optimized Configs
-├── recommended_config_variant_a.json  # Best aggressive config ($274k)
-├── recommended_config_consensus.json  # Conservative consensus config
-│
-├── # ThinkScript Studies
-├── AMT_V37_OPTIMIZED.ts     # Latest (gamma filter, completed bar filter)
-├── AMT_V36_OPTIMIZED.ts     # Previous version
-│
-├── # Utilities
-├── requirements.txt     # Python dependencies
-├── .env.template        # Environment template
-└── README.md            # This file
-```
-
-## How It Works
-
-### Startup Flow
-
-```
-1. Load configuration
-2. Authenticate with Schwab API
-3. Initialize signal detector with ALL config params (including signal enables)
-4. Load historical bars (today only) to calculate VAH/POC/VAL
-5. Set starting balance for position sizing
-6. Enter main trading loop
-```
-
-### Signal Detection Flow
-
-```
-1. Fetch 5-minute bars from Schwab price history
-2. Calculate Value Area:
-   - VWAP = session volume-weighted average price
-   - StdDev = standard deviation of last 20 closes (not all bars!)
-   - VAH = VWAP + (StdDev × 0.5)
-   - VAL = VWAP - (StdDev × 0.5)
-3. Track Opening Range (first 30 min)
-4. Check all signal conditions
-5. Apply filters (OR bias, time, cooldown, daily limits)
-6. Generate signal if conditions met AND signal type is enabled
-```
-
-### Trade Execution Flow
-
-```
-1. Signal detected (e.g., VAL_BOUNCE = LONG)
-2. Check daily loss limit
-3. Check delta exposure limit
-4. Calculate position size (fixed fractional)
-5. Find option at target delta (67Δ morning, 83Δ afternoon)
-6. Verify buying power
-7. Place market order via Schwab API
-8. Track position until opposite signal
-9. Record P&L, update analytics
-```
-
-### Session Reset Flow (New Trading Day)
-
-```
-1. Save prior day VAH/VAL/POC
-2. Clear session accumulators (high, low, volume, VWAP)
-3. Clear bars deque (prevents cross-day contamination)
-4. Reset Opening Range tracking
-5. Reset daily trade count
-6. Reset bars_above_vah / bars_below_val counters
-7. Reset cooldown tracking
-```
-
-### Monitoring Flow
-
-```
-1. Every 30 min: Update balance, check drawdown
-2. At 4:15 PM ET: Send daily summary notification
-3. Friday close: Send weekly report
-4. On position close: Record P&L, notify
-```
-
-## Strategy Optimization
-
-The bot includes powerful optimization tools to find the best parameter combinations for your trading strategy.
-
-### Optimizer Options
-
-| Tool | Purpose | Best For |
-|------|---------|----------|
-| `optimizer.py` | Grid search (exhaustive) | Small parameter spaces, exact testing |
-| `optimizer_smart.py` | Bayesian optimization (Optuna) | Large parameter spaces, fast convergence |
-| `optimizer_multirun.py` | Statistical confidence testing | Validating results across multiple runs |
-
-### Quick Start
-
-```bash
-# Install Optuna (required for smart optimizer)
-pip install optuna
-
-# Run smart optimizer (recommended)
-python optimizer_smart.py --days 90 --trials 1000 --turbo
-
-# Apply optimized config
-python apply_config.py --from best_params.json
-```
-
-### Smart Optimizer (Recommended)
-
-The Bayesian optimizer uses Optuna's Tree-structured Parzen Estimator (TPE) to intelligently search the parameter space. It finds near-optimal parameters in 500-2000 trials instead of millions.
-
-```bash
-# Basic usage (90 days, 1000 trials)
-python optimizer_smart.py --days 90 --trials 1000 --turbo
-
-# Staged optimization (signal params first, then risk params)
-python optimizer_smart.py --days 90 --phase signal --trials 500 --save-best signal_params.json
-python optimizer_smart.py --days 90 --phase risk --lock signal_params.json --trials 500 --save-best final_params.json
-
-# Deep search with longer history
-python optimizer_smart.py --days 120 --trials 2000 --turbo
-```
-
-**Options:**
-- `--days N` - Days of historical data (default: 90)
-- `--trials N` - Number of optimization trials (default: 500)
-- `--turbo` - Use more CPU cores for parallel processing
-- `--phase [all|signal|risk]` - Optimize all params, signals only, or risk only
-- `--lock FILE` - Lock params from a previous run
-- `--save-best FILE` - Save best params to JSON
-- `--min-trades N` - Minimum trades for valid result (default: 30)
-
-### Multi-Run Optimizer (Statistical Confidence)
-
-Run the optimizer multiple times with different random seeds to build confidence in your parameter choices.
-
-```bash
-# Default: 5 runs with different seeds
-python optimizer_multirun.py --days 90 --trials 500 --turbo
-
-# More confidence: 10 runs
-python optimizer_multirun.py --runs 10 --days 90 --trials 500 --turbo
-
-# Custom seeds
-python optimizer_multirun.py --runs 3 --seeds "42,123,999"
-```
-
-**Output:**
-- `multirun_results/analysis.json` - Statistical analysis across all runs
-- `multirun_results/recommended_config.json` - Consensus parameters
-- Individual run results in `multirun_results/run_N_seed_X.json`
-
-**What It Shows:**
-```
-PARAMETER RECOMMENDATIONS
-
-Signal Enables:
-  enable_val_bounce........................ False  (1T/4F) [HIGH]
-  enable_vah_rejection..................... False  (0T/5F) [HIGH]
-  enable_poc_reclaim....................... True   (4T/1F) [HIGH]
-
-Numeric Parameters:
-  signal_cooldown_bars..................... 15     (range: 12-18) [HIGH]
-  kelly_fraction........................... 0.234  (range: 0.1-0.4) [MED]
-```
-
-Confidence levels:
-- **HIGH (≥80%)** - Parameter is stable, trust it
-- **MED (60-80%)** - Somewhat stable
-- **LOW (<60%)** - Unstable, may not matter much
-
-### Grid Search Optimizer (Exhaustive)
-
-For smaller parameter spaces or when you want to test every combination.
-
-```bash
-# Fast mode (~500 combinations, ~20 sec)
-python optimizer.py --fast
-
-# Risk-focused mode (~2,880 combinations, ~2 min)
-python optimizer.py --risk
-
-# Full mode (~10,000 combinations, ~5 min)
-python optimizer.py --full
-
-# Custom settings
-python optimizer.py --days 60 --capital 25000
-```
-
-### Parameters Being Optimized
-
-**Signal Parameters:**
-| Parameter | Range | Description |
-|-----------|-------|-------------|
-| `signal_cooldown_bars` | 5-25 | Bars between signals |
-| `min_confirmation_bars` | 1-5 | Bars to confirm signal |
-| `sustained_bars_required` | 2-6 | Bars for sustained breakout |
-| `volume_threshold` | 1.0-2.0 | Volume multiplier |
-
-**Signal Enables (Boolean):**
-- `enable_val_bounce`, `enable_vah_rejection`
-- `enable_poc_reclaim`, `enable_poc_breakdown`
-- `enable_breakout`, `enable_breakdown`
-- `enable_sustained_breakout`, `enable_sustained_breakdown`
-
-**Filters:**
-- `use_time_filter` - Morning-only trading
-- `use_or_bias_filter` - Opening range bias filter
-
-**Delta Targeting:**
-| Parameter | Range | Description |
-|-----------|-------|-------------|
-| `target_delta` | 0.20-0.40 | Morning delta target |
-| `afternoon_delta` | 0.30-0.50 | Afternoon delta target |
-| `afternoon_hour` | 11-14 | Hour to switch deltas |
-
-**Kelly Position Sizing:**
-| Parameter | Range | Description |
-|-----------|-------|-------------|
-| `kelly_fraction` | 0.0-3.0 | Kelly multiplier (0=fixed, 1=full Kelly) |
-| `max_equity_risk` | 0.05-0.30 | Max % equity per trade |
-| `max_kelly_pct_cap` | 0.15-0.40 | Cap on raw Kelly % |
-| `hard_max_contracts` | 20-150 | Absolute contract limit |
-| `kelly_lookback` | 10-30 | Rolling window for Kelly stats |
-
-**Risk Management:**
-| Parameter | Range | Description |
-|-----------|-------|-------------|
-| `max_daily_trades` | 1-10 | Max trades per day |
-| `enable_stop_loss` | T/F | Enable stop loss |
-| `stop_loss_percent` | 20-70 | Stop loss % |
-| `enable_take_profit` | T/F | Enable take profit |
-| `take_profit_percent` | 40-200 | Take profit % |
-| `enable_trailing_stop` | T/F | Enable trailing stop |
-| `min_hold_bars` | 0-10 | Min bars before exit |
-
-### Applying Optimized Config
-
-After optimization, apply the results to your config and ThinkScript:
-
-```bash
-# Preview changes (no files written)
-python apply_config.py --from multirun_results/recommended_config.json --preview
-
-# Apply config (writes config.py)
-python apply_config_simple.py --from recommended_config_variant_a.json
-```
-
-This generates `config.py` with optimized parameters. The ThinkScript (`AMT_V35_Optimized.ts`) is already pre-configured.
-
-### Variant Testing Results
-
-| Variant | Win Rate | Total P&L | Trades | Description |
-|---------|----------|-----------|--------|-------------|
-| Baseline | 84.8% | $57,416 | 33 | Long-only, original params |
-| **A: Force Shorts** | **71.8%** | **$143,530** | **60** | **VAH rejection + breakdown enabled** |
-| B: Force VIX | 82.1% | $53,784 | 37 | VIX regime adjustment |
-| D: Short Cooldown | 71.7% | $43,703 | 65 | More frequent signals |
-
-**Key Finding:** Variant A (forcing shorts enabled) produced 2.5x more profit despite lower win rate. Lower win rate but bigger wins when right.
-
-### Running Your Own Optimization
-
-```bash
-# Quick test (500 trials, ~2 min)
-python optimizer_simple.py --days 90 --trials 500 --turbo
-
-# Full multi-run with statistical confidence (5 runs)
-python optimizer_multirun_simple.py --runs 5 --days 365 --trials 500 --turbo
-
-# Run all variants with shared data cache
-python run_all_variants.py --runs 5 --days 365 --trials 500 --turbo
-```
-
-### Recommended Configs
-
-**Aggressive (Variant A best run):**
-```bash
-python apply_config_simple.py --from recommended_config_variant_a.json
-```
-- $274k P&L, 72.6% WR, $32k max drawdown
-- Best for: Larger accounts, higher risk tolerance
-
-**Conservative (Consensus):**
-```bash
-python apply_config_simple.py --from recommended_config_consensus.json
-```
-- $143k avg P&L, 71-74% WR, $18k max drawdown  
-- Best for: Smaller accounts, lower risk tolerance
-
----
-
-## Backtesting
-
-The backtesting module replays historical data through the signal detector to validate strategy performance.
-
-### Usage
-
-```bash
-# Default: Last 30 trading days
-python backtest.py
-
-# Last 60 trading days
-python backtest.py --days 60
-
-# From specific start date
-python backtest.py --start 2024-12-01
-
-# Export trades to CSV
-python backtest.py --output trades.csv
-
-# Verbose mode (shows each trade)
-python backtest.py --verbose
-
-# Custom settings
-python backtest.py --days 30 --capital 25000 --contracts 2 --output results.csv
-```
-
-### Sample Output
-
-```
-======================================================================
-                        BACKTEST RESULTS
-======================================================================
-  Period: 2024-11-15 to 2024-12-30
-  Trading Days: 30
-  Total Bars: 2,340
-
-----------------------------------------------------------------------
-  TRADE STATISTICS
-----------------------------------------------------------------------
-  Total Trades:      47
-  Winning Trades:    28
-  Losing Trades:     19
-  Win Rate:          59.6%
-
-  Avg Win:           $156.32
-  Avg Loss:          $-89.45
-  Avg Trade:         $56.78
-  Avg Bars Held:     8.3
-
-----------------------------------------------------------------------
-  PERFORMANCE
-----------------------------------------------------------------------
-  Total P&L:         $2,668.66
-  Profit Factor:     2.58
-  Expectancy:        $56.78 per trade
-
-  Best Day:          $425.00
-  Worst Day:         $-312.50
-  Sharpe Ratio:      1.45
-
-----------------------------------------------------------------------
-  RISK METRICS
-----------------------------------------------------------------------
-  Starting Capital:  $10,000.00
-  Ending Capital:    $12,668.66
-  Return:            26.7%
-  Max Drawdown:      $845.00 (7.2%)
-
-----------------------------------------------------------------------
-  SIGNALS BY TYPE
-----------------------------------------------------------------------
-  VAL_BOUNCE                  12 trades    $    892.50
-  POC_RECLAIM                  9 trades    $    645.00
-  VAH_REJECTION                8 trades    $    412.30
-  BREAKOUT                     7 trades    $    318.86
-  ...
-======================================================================
-```
-
-### What It Measures
-
-- **Win Rate** - Percentage of profitable trades
-- **Profit Factor** - Gross wins / gross losses (>1 is profitable)
-- **Expectancy** - Average P&L per trade
-- **Sharpe Ratio** - Risk-adjusted return (annualized)
-- **Max Drawdown** - Largest peak-to-trough decline
-- **Signal Breakdown** - P&L by signal type to identify best performers
-
-### Option P&L Estimation
-
-The backtester estimates option P&L using:
-```
-Option P&L ≈ Underlying Move × Delta × 100 × Contracts
-```
-
-This is a simplification - real 0DTE options are affected by IV crush, theta decay, and gamma. Use results as directional guidance, not exact predictions.
-
-## Matching Your ToS Indicator
-
-The Python signal detection mirrors your ToS script logic:
-
-| ToS Parameter | Python Equivalent | Optimized Value |
-|---------------|-------------------|-----------------|
-| `volumeThreshold` | `volume_threshold` | **1.478** |
-| `minConfirmationBars` | `min_confirmation_bars` | 2 |
-| `sustainedBarsRequired` | `sustained_bars_required` | **5** |
-| `signalCooldownBars` | `signal_cooldown_bars` | **17** |
-| `useORBiasFilter` | `use_or_bias_filter` | True |
-| `maxDailyTrades` | `max_daily_trades` | **6** |
-| `enableVALBounce` | `enable_val_bounce` | True |
-| `enableVAHRejection` | `enable_vah_rejection` | **True** |
-| `enableBreakout` | `enable_breakout` | **False** |
-| `enableBreakdown` | `enable_breakdown` | True |
-| `enableSustainedBreakout` | `enable_sustained_breakout` | **False** |
-| `enableSustainedBreakdown` | `enable_sustained_breakdown` | **False** |
-| `useVixRegime` | `use_vix_regime` | **True** |
-| `vixHighThreshold` | `vix_high_threshold` | 25 |
-| `vixLowThreshold` | `vix_low_threshold` | 15 |
-
-## Sample Log Output
-
-### Single-Leg Mode (Default)
-
-```
-2025-01-02 10:30:05 ET - INFO - ─── Bar #42 | 10:30:05 ET ───
-2025-01-02 10:30:05 ET - INFO -   Price: $591.25 (O:590.80 H:591.50 L:590.75)
-2025-01-02 10:30:05 ET - INFO -   Volume: 1,245,678
-2025-01-02 10:30:05 ET - INFO -   VAH: $592.10 | POC: $591.50 | VAL: $590.25
-2025-01-02 10:30:05 ET - INFO -   OR Range: $589.50 - $591.75 | Bias: BULLISH
-2025-01-02 10:30:05 ET - INFO -   Gamma: 🟢 POSITIVE | ZG: $590 | Bias: FADE MOVES
-2025-01-02 10:30:05 ET - INFO -   Levels: PUT₁ $585 | ZG $590 | CALL₁ $595
-2025-01-02 10:30:05 ET - INFO -   Price vs ZG: $591.25 (+1.25)
-2025-01-02 10:30:05 ET - INFO - 
-2025-01-02 10:30:05 ET - INFO - 🚨 SIGNAL: VAL_BOUNCE - LONG
-2025-01-02 10:30:05 ET - INFO - 🚨 Gamma: POSITIVE | ZG: $590
-2025-01-02 10:30:05 ET - INFO - Position sizing: $10,000.00 balance, 2.0% risk = 3 contracts
-2025-01-02 10:30:05 ET - INFO - Delta exposure OK: 0 + 30 = 30 (max: 100)
-2025-01-02 10:30:05 ET - INFO - Looking for CALL option, SPY @ $591.25, target delta: 67%
-2025-01-02 10:30:05 ET - INFO - Selected: SPY250102C00593000 | Strike: 593.0 | Delta: 0.67
-2025-01-02 10:30:05 ET - INFO - Trade executed: T00001
-```
-
-### Signal Blocked by Gamma Filter
-
-```
-2025-01-02 11:45:05 ET - INFO - ─── Bar #57 | 11:45:05 ET ───
-2025-01-02 11:45:05 ET - INFO -   Price: $593.50 (O:593.00 H:593.75 L:592.80)
-2025-01-02 11:45:05 ET - INFO -   Gamma: 🟢 POSITIVE | ZG: $591 | Bias: FADE MOVES
-2025-01-02 11:45:05 ET - INFO - 
-2025-01-02 11:45:05 ET - INFO - ⚠️ Signal blocked by gamma filter: ✗ BREAKOUT blocked in +gamma (breakouts get faded)
-```
-
-### Butterfly Mode (--butterfly)
-
-```
-2026-01-06 10:35:02 ET - INFO - ============================================================
-2026-01-06 10:35:02 ET - INFO - 🦋 BUTTERFLY SIGNAL: SHORT PUT
-2026-01-06 10:35:02 ET - INFO -    Signal: VAH_REJECTION
-2026-01-06 10:35:02 ET - INFO -    Price: $6045.25
-2026-01-06 10:35:02 ET - INFO - ============================================================
-2026-01-06 10:35:02 ET - INFO -    Underlying: $6045.25
-2026-01-06 10:35:02 ET - INFO -    Strikes: 6030/6035/6040
-2026-01-06 10:35:02 ET - INFO -    ┌─ BUTTERFLY STRUCTURE ─────────────────────
-2026-01-06 10:35:02 ET - INFO -    │ Lower wing (6030): $4.90 debit
-2026-01-06 10:35:02 ET - INFO -    │ Middle x2  (6035): $7.40 × 2 = $14.80 credit
-2026-01-06 10:35:02 ET - INFO -    │ Upper wing (6040): $5.10 debit
-2026-01-06 10:35:02 ET - INFO -    ├───────────────────────────────────────────
-2026-01-06 10:35:02 ET - INFO -    │ Wing debit:     $10.00
-2026-01-06 10:35:02 ET - INFO -    │ Middle credit:  $14.80
-2026-01-06 10:35:02 ET - INFO -    │ Theoretical net: $4.80
-2026-01-06 10:35:02 ET - INFO -    │ Target credit:  $13.00 (30% above wings)
-2026-01-06 10:35:02 ET - INFO -    └───────────────────────────────────────────
-2026-01-06 10:35:02 ET - INFO -    ✓ FILLED @ net credit $4.80
-2026-01-06 10:35:02 ET - INFO -    💰 CREDIT STACKED: $480.00
-2026-01-06 10:35:02 ET - INFO -    📊 Credits today: $480.00 | Total: $2,340.00
-```
-
-## Safety Features
-
-1. **Paper Trading Default** - Won't place real orders until explicitly enabled
-2. **Daily Trade Limit** - Prevents overtrading (default: 6/day)
-3. **Daily Loss Limit** - Stops trading when down $500 or 5%
-4. **Delta Exposure Limit** - Prevents over-leveraging
-5. **RTH Only** - No trades outside market hours
-6. **Confirmation Required** - Must type "CONFIRM" for live mode
-7. **Buying Power Check** - Validates funds before each trade
-8. **Drawdown Alerts** - Notifies when down 10%+ from peak
-9. **Gamma Filter** - Blocks momentum signals in mean-reversion environments
-
-## Troubleshooting
-
-### "Authentication failed"
-- Verify your App Key and App Secret are correct
-- Ensure redirect URI matches exactly: `https://127.0.0.1:8182/callback`
-- Check that your Schwab app is approved and active
-
-### "No suitable option found"
-- Market may be closed (options only trade RTH)
-- Verify `max_days_to_expiry` setting
-- If after hours, bot automatically uses next trading day
-
-### "Locked out - daily limit reached"
-- Working as designed - prevents overtrading
-- Could be trade count limit OR daily loss limit
-- Resets automatically at midnight
-
-### "Delta exposure limit"
-- You have existing positions that would exceed max delta
-- Close existing positions or increase `max_delta_exposure`
-
-### No signals firing
-- Check if within RTH hours (9:30 AM - 4:00 PM ET)
-- Verify OR bias filter isn't blocking (signals must align with opening range direction)
-- Check signal cooldown (17 bars = ~85 min between signals)
-- Enable debug logging: Change `level=logging.INFO` to `level=logging.DEBUG`
-
-### Value Area doesn't match ToS
-- **Fixed in v1.1** - StdDev now uses last 20 bars only (was using all 40)
-- **Fixed in v1.1** - Session reset now clears bars deque
-- Restart bot after updating `signal_detector.py`
-
-### Signals firing when they should be disabled
-- **Fixed in v1.1** - All `enable_*` flags now passed to SignalDetector
-- Update both `signal_detector.py` and `trading_bot.py`
-- Verify your `config.py` has the correct enable flags set
-
-### No push notifications
-- Verify `PUSHOVER_USER_KEY` and `PUSHOVER_API_TOKEN` in `.env`
-- Test with: `python -c "from notifications import get_notifier; get_notifier().send('Test', 'Test')"`
-
-## Changelog
-
-### v1.3 (January 6, 2026)
-- **NEW:** Gamma exposure filter (`use_gamma_filter`) - filters signals based on dealer gamma positioning
-- **NEW:** `gamma_context.py` module for zero gamma calculation and regime detection
-- **NEW:** `--no-gamma` CLI flag to disable gamma filtering
-- **NEW:** Gamma levels plotted on ToS chart (Zero Gamma, Call γ1, Put γ1)
-- **NEW:** `onlyCompletedBars` in ToS study - prevents false signals that disappear before bar closes
-- **UPDATED:** ToS study to V3.7 with gamma filter integration
-- **UPDATED:** Bot logs gamma regime and levels each bar
-
-### v1.2 (January 6, 2026)
-- **NEW:** Butterfly credit spread mode (`--butterfly` flag)
-- **NEW:** Symbol mapping (`--execution-symbol`) for ES→SPX trading
-- **NEW:** `./bot.sh butterfly` convenience command
-- **FIXED:** OR bias buffer zone now defaults to NEUTRAL (was keeping stale value)
-- **FIXED:** RTH cooldown reset at 9:30 AM (globex signals no longer suppress morning)
-- **FIXED:** VIX=0 during extended hours uses default cooldown (was triggering low-vol multiplier)
-- **FIXED:** Price $0.00 on intra-bar signals (now validates quote price)
-- **UPDATED:** bot.sh with butterfly examples and improved help text
-
-### v1.1 (January 5, 2026)
-- **FIXED:** Value Area calculation now matches ToS exactly (StdDev uses last N bars only)
-- **FIXED:** Session reset clears bars deque to prevent cross-day contamination  
-- **FIXED:** All signal enable flags now passed from config to SignalDetector
-- **ADDED:** VIX regime support with dynamic cooldown adjustment
-- **ADDED:** `bars_above_vah` / `bars_below_val` counters in state summary
-
-### v1.0 (December 2025)
-- Initial release with full signal detection matching ToS AMT indicator
-- Schwab API integration for automated options trading
-- Opening Range bias filter
-- Daily trade lockout system
-- Pushover notifications
-- Backtesting and optimization tools
-
-## Disclaimer
-
-⚠️ **This software is for educational purposes only.**
-
-- Trading options involves substantial risk of loss
-- Past performance does not guarantee future results
-- The authors are not responsible for any financial losses
-- Always test thoroughly in paper trading mode first
-- Never trade with money you cannot afford to lose
-
-## License
-
-MIT License - Use at your own risk.
+    def get_current_bar(self) -> Optional[Bar]:
+        """
+        Get the current 5-minute bar data from price history.
+        """
+        try:
+            # Calculate current 5-min period
+            now = get_et_now()
+            current_period_start = now.replace(
+                minute=(now.minute // 5) * 5,
+                second=0,
+                microsecond=0,
+                tzinfo=None
+            )
+            
+            # Get recent bars from price history
+            bars = self.client.get_recent_bars(
+                symbol=self.config.trading.symbol,
+                num_bars=5,
+                bar_minutes=5,
+                extended_hours=True
+            )
+            
+            if not bars:
+                logger.warning("No bars returned from price history")
+                return None
+            
+            last_bar = bars[-1]
+            bar_time = last_bar['datetime']
+            
+            # Calculate the bar's 5-min period start
+            bar_period_start = bar_time.replace(
+                minute=(bar_time.minute // 5) * 5,
+                second=0,
+                microsecond=0
+            )
+            
+            # Create bar object
+            bar = Bar(
+                timestamp=bar_time,
+                open=last_bar['open'],
+                high=last_bar['high'],
+                low=last_bar['low'],
+                close=last_bar['close'],
+                volume=last_bar['volume']
+            )
+            
+            self.last_price = bar.close
+            return bar
+            
+        except Exception as e:
+            logger.error(f"Error getting bar: {e}")
+            return None
+    
+    def should_process_new_bar(self) -> bool:
+        """Check if we should process a new bar based on time"""
+        now = datetime.now()
+        
+        if self.last_bar_time is None:
+            return True
+        
+        # Check if we've crossed into a new 5-minute period
+        current_period = now.minute // 5
+        last_period = self.last_bar_time.minute // 5
+        
+        if now.hour != self.last_bar_time.hour:
+            return True
+        
+        if current_period != last_period:
+            return True
+        
+        return False
+    
+    def _is_new_bar(self, bar: Bar) -> bool:
+        """Check if this bar is different from the last processed bar"""
+        if self._last_processed_bar_time is None:
+            logger.info(f"First bar - timestamp: {bar.timestamp}")
+            return True
+        
+        # Normalize both timestamps to naive (remove timezone info for comparison)
+        bar_ts = bar.timestamp.replace(tzinfo=None) if bar.timestamp.tzinfo else bar.timestamp
+        last_ts = self._last_processed_bar_time.replace(tzinfo=None) if self._last_processed_bar_time.tzinfo else self._last_processed_bar_time
+        
+        # Compare bar timestamps - only process if it's a new bar
+        is_new = bar_ts > last_ts
+        
+        if not is_new:
+            logger.debug(f"Same bar as before ({bar_ts}) - skipping")
+        else:
+            logger.info(f"New bar detected: {bar_ts} > {last_ts}")
+        
+        return is_new
+    
+    def process_bar(self, bar: Bar) -> Optional[Signal]:
+        """Process a bar and check for signals"""
+        self.bars_processed += 1
+        self.last_bar_time = bar.timestamp
+        
+        # Update position tracking
+        self.position_manager.update_bars_held()
+        
+        # Update VIX if available (for regime-based cooldown)
+        try:
+            vix_quote = self.client.get_quote("$VIX.X")  # Schwab VIX symbol
+            if vix_quote and hasattr(vix_quote, 'last_price'):
+                self.detector.set_vix(vix_quote.last_price)
+        except:
+            pass  # VIX not available, use default
+        
+        # Track today's open for gamma calculation (first bar of RTH)
+        if bar.timestamp:
+            bar_time = bar.timestamp.time() if hasattr(bar.timestamp, 'time') else None
+            if bar_time:
+                from datetime import time as dt_time
+                # First bar of RTH (9:30-9:35)
+                if dt_time(9, 30) <= bar_time < dt_time(9, 35):
+                    if self._today_open_price is None or bar.timestamp.date() != getattr(self, '_today_open_date', None):
+                        self._today_open_price = bar.open
+                        self._today_open_date = bar.timestamp.date()
+                        if self.gamma_context:
+                            self.gamma_context.set_today_open(bar.open)
+                            logger.info(f"  Gamma: Today's open set to ${bar.open:.2f}")
+        
+        # Update gamma context with current price
+        if self.gamma_context:
+            self.gamma_context.update(bar.close, get_et_now())
+        
+        # Add bar to detector and check for signals
+        signal = self.detector.add_bar(bar)
+        
+        # Get current state from detector
+        state = self.detector.get_state_summary()
+        
+        # Log bar info with ET time
+        et_time = get_et_now().strftime('%H:%M:%S ET')
+        is_synthetic = bar.volume == 0
+        bar_type = " (synthetic - no trades)" if is_synthetic else ""
+        
+        logger.info("")
+        logger.info(f"─── Bar #{self.bars_processed} | {et_time}{bar_type} ───")
+        logger.info(f"  Price: ${bar.close:.2f} (O:{bar.open:.2f} H:{bar.high:.2f} L:{bar.low:.2f})")
+        if not is_synthetic:
+            logger.info(f"  Volume: {bar.volume:,}")
+        
+        # Only show levels if we have enough data
+        vah, poc, val = state['vah'], state['poc'], state['val']
+        if vah > 0 and poc > 0 and val > 0:
+            logger.info(f"  VAH: ${vah:.2f} | POC: ${poc:.2f} | VAL: ${val:.2f}")
+            logger.info(f"  Position vs Levels: {state['position']}")
+            logger.info(f"  Bars Above VAH: {state['bars_above_vah']} | Bars Below VAL: {state['bars_below_val']}")
+        else:
+            logger.info(f"  Value Area: Building... (need {self.config.signal.length_period} bars, have {self.bars_processed})")
+        
+        # OR status
+        or_high, or_low = state['or_high'], state['or_low']
+        if state['or_complete']:
+            # Check for valid OR values
+            import math
+            if or_low > 0 and not math.isinf(or_high) and or_high > or_low:
+                logger.info(f"  OR Range: ${or_low:.2f} - ${or_high:.2f} | Bias: {state['or_bias']}")
+            else:
+                logger.info(f"  OR: Complete | Bias: {state['or_bias']}")
+        else:
+            logger.info(f"  OR: Building... (completes at 10:00 ET)")
+        
+        # Gamma context status
+        if self.gamma_context and self.gamma_context.levels:
+            self.gamma_context.log_status()
+        
+        # Position status
+        pos = self.position_manager.get_position_summary()
+        if pos['status'] != 'FLAT':
+            logger.info(f"  Current Position: {pos['status']} | P&L: ${pos.get('unrealized_pnl', 0):.2f}")
+        
+        # Cooldown status (now shows effective cooldown with VIX adjustment)
+        cooldown = state.get('bars_since_signal', 999)
+        effective_cooldown = state.get('effective_cooldown', self.config.signal.signal_cooldown_bars)
+        if cooldown < effective_cooldown:
+            vix_info = f" (VIX: {state.get('vix', 20):.1f})" if self.config.signal.use_vix_regime else ""
+            logger.info(f"  Cooldown: {cooldown}/{effective_cooldown} bars{vix_info}")
+        
+        # Apply gamma filter to signal
+        if signal and self.gamma_context:
+            allowed, reason = self.gamma_context.should_allow_signal(
+                signal.signal_type.value,
+                signal.direction.value
+            )
+            if not allowed:
+                logger.info("")
+                logger.info(f"⚠️ Signal blocked by gamma filter: {reason}")
+                signal = None  # Block the signal
+        
+        if signal:
+            self.signals_generated += 1
+            logger.info("")
+            logger.info("🚨 " + "=" * 50)
+            logger.info(f"🚨 SIGNAL: {signal.signal_type.value} - {signal.direction.value}")
+            logger.info(f"🚨 Price: ${signal.price:.2f}")
+            logger.info(f"🚨 VAH: ${signal.vah:.2f}, POC: ${signal.poc:.2f}, VAL: ${signal.val:.2f}")
+            logger.info(f"🚨 OR Bias: {'BULL' if signal.or_bias == 1 else 'BEAR' if signal.or_bias == -1 else 'NEUTRAL'}")
+            if self.gamma_context and self.gamma_context.levels:
+                logger.info(f"🚨 Gamma: {self.gamma_context.regime.value} | ZG: ${self.gamma_context.levels.zero_gamma:.0f}")
+            logger.info(f"🚨 Reason: {signal.reason}")
+            logger.info("🚨 " + "=" * 50)
+            logger.info("")
+        
+        return signal
+    
+    def execute_signal(self, signal: Signal) -> bool:
+        """Execute a trade based on signal"""
+        # Notify on signal detection
+        self.notifier.signal_alert(
+            signal_type=signal.signal_type.value,
+            direction=signal.direction.value,
+            price=signal.price,
+            symbol=self.config.trading.symbol
+        )
+        
+        trade = self.position_manager.process_signal(signal)
+        
+        if trade:
+            self.trades_executed += 1
+            logger.info(f"Trade executed: {trade.id}")
+            logger.info(f"  Direction: {trade.direction.value}")
+            logger.info(f"  Option: {trade.option_symbol}")
+            logger.info(f"  Strike: {trade.option_strike}")
+            logger.info(f"  Expiry: {trade.option_expiry}")
+            
+            # Notify on trade execution
+            self.notifier.trade_executed(
+                direction=trade.direction.value,
+                symbol=self.config.trading.symbol,
+                option_symbol=trade.option_symbol,
+                price=trade.entry_price,
+                quantity=trade.quantity
+            )
+            return True
+        
+        return False
+    
+    def _get_current_bar_period(self) -> int:
+        """Get the current 5-minute bar period (0-11 within each hour)"""
+        now = get_et_now()
+        return now.hour * 12 + now.minute // 5
+    
+    def _reset_live_bar(self) -> None:
+        """Reset live bar tracking for a new period"""
+        self._live_bar_open = None
+        self._live_bar_high = None
+        self._live_bar_low = None
+        self._live_bar_volume = 0
+        self._live_bar_start = None
+        self._signal_fired_this_bar = False
+    
+    def _update_live_bar(self, quote: Any) -> Optional[Bar]:
+        """
+        Update the live bar with current quote data.
+        Returns a Bar object representing the current in-progress bar.
+        """
+        try:
+            price = quote.last_price
+            now = get_et_now()
+            
+            # Validate price - reject 0 or None
+            if not price or price <= 0:
+                logger.debug(f"Invalid quote price: {price} - skipping live bar update")
+                return None
+            
+            if self._live_bar_open is None:
+                # First tick of this bar
+                self._live_bar_open = price
+                self._live_bar_high = price
+                self._live_bar_low = price
+                self._live_bar_start = now
+            else:
+                # Update high/low
+                if price > self._live_bar_high:
+                    self._live_bar_high = price
+                if price < self._live_bar_low:
+                    self._live_bar_low = price
+            
+            # Build live bar
+            live_bar = Bar(
+                timestamp=self._live_bar_start or now,
+                open=self._live_bar_open,
+                high=self._live_bar_high,
+                low=self._live_bar_low,
+                close=price,  # Current price is the "close" of the live bar
+                volume=self._live_bar_volume  # Volume is approximate
+            )
+            
+            return live_bar
+            
+        except Exception as e:
+            logger.debug(f"Error updating live bar: {e}")
+            return None
+    
+    def _check_intra_bar_signal(self) -> None:
+        """Check for signals on the live (in-progress) bar"""
+        if not self.config.enable_intra_bar_signals:
+            return
+        
+        # Don't check if we already fired a signal this bar
+        if self._signal_fired_this_bar:
+            return
+        
+        # Check if enough time has passed since last intra-bar check
+        now = datetime.now()
+        if self._last_intra_bar_check:
+            elapsed = (now - self._last_intra_bar_check).total_seconds()
+            if elapsed < self.config.intra_bar_check_interval:
+                return
+        
+        self._last_intra_bar_check = now
+        
+        try:
+            # Get current quote
+            quote = self.client.get_quote(self.config.trading.symbol)
+            
+            # Update live bar
+            live_bar = self._update_live_bar(quote)
+            if not live_bar:
+                return
+            
+            # Check for signal on live bar
+            signal = self.detector.check_live_bar(live_bar)
+            
+            if signal:
+                logger.info("")
+                logger.info("╔════════════════════════════════════════════════════════════╗")
+                logger.info("║            🔔 INTRA-BAR SIGNAL DETECTED                    ║")
+                logger.info("╠════════════════════════════════════════════════════════════╣")
+                logger.info(f"║  Signal: {signal.signal_type.value:<47}║")
+                logger.info(f"║  Direction: {signal.direction.value:<44}║")
+                logger.info(f"║  Price: ${live_bar.close:<46.2f}║")
+                logger.info("╚════════════════════════════════════════════════════════════╝")
+                logger.info("")
+                
+                # Mark that we fired a signal this bar
+                self._signal_fired_this_bar = True
+                self.signals_generated += 1
+                
+                # Execute if not locked out
+                if not self.position_manager.is_locked_out():
+                    self.execute_signal(signal)
+                else:
+                    logger.warning("Signal ignored - daily trade limit reached")
+                    
+        except Exception as e:
+            logger.debug(f"Error in intra-bar check: {e}")
+    
+    def run_loop(self) -> None:
+        """Main trading loop"""
+        logger.info("Starting main trading loop...")
+        if self.config.enable_intra_bar_signals:
+            logger.info(f"Intra-bar signal checking ENABLED (every {self.config.intra_bar_check_interval}s)")
+        else:
+            logger.info("Intra-bar signals disabled - will only check on bar close")
+        logger.info("Waiting for new 5-minute bar...")
+        
+        while self.running:
+            try:
+                # Check for new trading day
+                self.tracker.new_trading_day()
+                
+                # Check for scheduled reports (daily summary, weekly report)
+                self.tracker.check_scheduled_reports()
+                
+                # Check market hours
+                if not self.is_market_open():
+                    if self.config.time.rth_only:
+                        logger.debug("Market closed - waiting...")
+                        time.sleep(60)
+                        continue
+                
+                # Check if we've moved to a new bar period
+                current_period = self._get_current_bar_period()
+                if self._current_bar_period != current_period:
+                    # New bar period - reset live bar tracking
+                    self._reset_live_bar()
+                    self._current_bar_period = current_period
+                
+                # Check risk management on existing position
+                if self.position_manager.has_position():
+                    exit_reason = self.position_manager.update_position_price()
+                    if exit_reason:
+                        logger.warning(f"Risk management triggered: {exit_reason}")
+                        closed_trades = self.position_manager.force_close_all(exit_reason)
+                        if closed_trades:
+                            self.trades_executed += len(closed_trades)
+                            logger.info(f"Position closed due to: {exit_reason}")
+                            
+                            # Record trade P&L in tracker
+                            for trade in closed_trades:
+                                if hasattr(trade, 'pnl') and trade.pnl is not None:
+                                    self.tracker.record_trade(trade.pnl, trade.pnl > 0)
+                
+                # INTRA-BAR SIGNAL CHECK
+                # Check for signals on live bar (if not already fired this bar)
+                if not self._signal_fired_this_bar:
+                    self._check_intra_bar_signal()
+                
+                # Check if we should process a completed bar
+                if self.should_process_new_bar():
+                    bar = self.get_current_bar()
+                    
+                    if bar:
+                        # Log the bar we fetched for debugging
+                        bar_ts_naive = bar.timestamp.replace(tzinfo=None) if bar.timestamp.tzinfo else bar.timestamp
+                        logger.debug(f"Fetched bar with timestamp: {bar_ts_naive}")
+                        
+                        if self._is_new_bar(bar):
+                            # This is a genuinely new completed bar
+                            # Skip signal check if we already fired intra-bar
+                            if self._signal_fired_this_bar:
+                                logger.info(f"Bar #{self.bars_processed + 1} closed - signal already fired intra-bar")
+                                # Still process bar to update state, but suppress signal
+                                self.detector.add_bar(bar, suppress_signals=False)
+                                self.bars_processed += 1
+                                self._last_processed_bar_time = bar.timestamp
+                            else:
+                                # Process normally
+                                signal = self.process_bar(bar)
+                                self._last_processed_bar_time = bar.timestamp
+                                
+                                if signal:
+                                    if not self.position_manager.is_locked_out():
+                                        self.execute_signal(signal)
+                                    else:
+                                        logger.warning("Signal ignored - daily trade limit reached")
+                
+                # Update balance periodically for drawdown tracking
+                if self.bars_processed > 0 and self.bars_processed % 6 == 0:  # Every 30 min
+                    try:
+                        current_balance = self.client.get_buying_power()
+                        self.tracker.update_balance(current_balance)
+                    except:
+                        pass
+                
+                # Log status periodically
+                if self.bars_processed > 0 and self.bars_processed % 12 == 0:  # Every hour on 5-min bars
+                    self.log_status()
+                
+                # Sleep until next check
+                time.sleep(self.config.data_poll_interval)
+                
+            except KeyboardInterrupt:
+                logger.info("Keyboard interrupt received")
+                self.stop()
+            except Exception as e:
+                logger.error(f"Error in main loop: {e}")
+                time.sleep(10)  # Wait before retrying
+    
+    def log_status(self) -> None:
+        """Log current bot status"""
+        detector_state = self.detector.get_state_summary()
+        position_summary = self.position_manager.get_position_summary()
+        daily_stats = self.position_manager.get_daily_stats()
+        
+        logger.info("=" * 50)
+        logger.info("BOT STATUS")
+        logger.info(f"  Time: {datetime.now().strftime('%H:%M:%S')}")
+        logger.info(f"  Price: {self.last_price:.2f}")
+        logger.info(f"  Position: {position_summary.get('status', 'FLAT')}")
+        logger.info(f"  OR Bias: {detector_state.get('or_bias', 'N/A')}")
+        logger.info(f"  VAH: {detector_state.get('vah', 0):.2f}")
+        logger.info(f"  POC: {detector_state.get('poc', 0):.2f}")
+        logger.info(f"  VAL: {detector_state.get('val', 0):.2f}")
+        logger.info(f"  VIX: {detector_state.get('vix', 20):.1f}")
+        logger.info(f"  Trades today: {daily_stats.get('trades_taken', 0)}/{self.config.trading.max_daily_trades}")
+        logger.info(f"  Bars processed: {self.bars_processed}")
+        logger.info(f"  Signals: {self.signals_generated}")
+        logger.info("=" * 50)
+    
+    def start(self) -> None:
+        """Start the bot"""
+        if not self.initialize():
+            logger.error("Failed to initialize bot")
+            return
+        
+        self.running = True
+        self.start_time = datetime.now()
+        
+        # Setup signal handlers
+        sig.signal(sig.SIGINT, self._signal_handler)
+        sig.signal(sig.SIGTERM, self._signal_handler)
+        
+        # Send start notification
+        mode = "PAPER" if self.config.paper_trading else "LIVE"
+        self.notifier.bot_started(mode, self.config.trading.symbol)
+        
+        logger.info("Bot started - entering main loop")
+        self.run_loop()
+    
+    def stop(self) -> None:
+        """Stop the bot gracefully"""
+        logger.info("Stopping bot...")
+        self.running = False
+        
+        # Log final stats
+        self.log_final_stats()
+        
+        # Send stop notification
+        daily_stats = self.position_manager.get_daily_stats()
+        self.notifier.bot_stopped(
+            trades=daily_stats.get('total_trades', 0),
+            pnl=daily_stats.get('total_pnl', 0),
+            symbol=self.config.trading.symbol
+        )
+        
+        logger.info("Bot stopped")
+    
+    def _signal_handler(self, signum, frame) -> None:
+        """Handle shutdown signals"""
+        logger.info(f"Received signal {signum}")
+        self.stop()
+        sys.exit(0)
+    
+    def log_final_stats(self) -> None:
+        """Log final session statistics"""
+        runtime = datetime.now() - self.start_time if self.start_time else timedelta(0)
+        daily_stats = self.position_manager.get_daily_stats()
+        
+        logger.info("=" * 50)
+        logger.info("SESSION SUMMARY")
+        logger.info(f"  Runtime: {runtime}")
+        logger.info(f"  Bars processed: {self.bars_processed}")
+        logger.info(f"  Signals generated: {self.signals_generated}")
+        logger.info(f"  Trades executed: {self.trades_executed}")
+        logger.info(f"  Today's P&L: ${daily_stats.get('total_pnl', 0):.2f}")
+        logger.info(f"  Win rate: {daily_stats.get('win_rate', 0):.1f}%")
+        logger.info("=" * 50)
+
+
+def main():
+    """Main entry point with CLI argument support"""
+    parser = argparse.ArgumentParser(
+        description='ToS Signal Trading Bot - Options Trading',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s                              Run with default config (SPY)
+  %(prog)s --symbol QQQ                 Trade QQQ instead of SPY
+  %(prog)s --symbol IWM --paper         Paper trade IWM
+  %(prog)s --symbol SPY -c 2 -m 5       2 contracts, max 5 trades/day
+  %(prog)s --help                       Show all options
+  
+ES futures → SPX options (butterfly credit spreads):
+  %(prog)s --symbol /ES --execution-symbol SPX
+  %(prog)s --symbol /ES --execution-symbol $SPX.X --butterfly
+  
+Running multiple symbols as daemons:
+  %(prog)s --symbol SPY --no-confirm &
+  %(prog)s --symbol QQQ --no-confirm &
+  %(prog)s --symbol IWM --paper --no-confirm &
+        """
+    )
+    
+    parser.add_argument(
+        '--symbol', '-s',
+        type=str,
+        default=None,
+        help='Signal symbol to watch (default: from config, usually SPY)'
+    )
+    
+    parser.add_argument(
+        '--execution-symbol', '-e',
+        type=str,
+        default=None,
+        help='Symbol to trade options on (default: same as signal symbol). Use for ES→SPX mapping.'
+    )
+    
+    parser.add_argument(
+        '--butterfly',
+        action='store_true',
+        help='Enable butterfly credit spread mode (for SPX/XSP credit stacking)'
+    )
+    
+    parser.add_argument(
+        '--paper', '-p',
+        action='store_true',
+        default=None,
+        help='Enable paper trading mode'
+    )
+    
+    parser.add_argument(
+        '--live',
+        action='store_true',
+        help='Force live trading mode (overrides config)'
+    )
+    
+    parser.add_argument(
+        '--contracts', '-c',
+        type=int,
+        default=None,
+        help='Number of contracts per trade'
+    )
+    
+    parser.add_argument(
+        '--max-trades', '-m',
+        type=int,
+        default=None,
+        help='Maximum trades per day'
+    )
+    
+    parser.add_argument(
+        '--no-confirm', '-y',
+        action='store_true',
+        help='Skip confirmation prompt (for daemon/background mode)'
+    )
+    
+    parser.add_argument(
+        '--cooldown',
+        type=int,
+        default=None,
+        help='Signal cooldown in bars (default: from config)'
+    )
+    
+    parser.add_argument(
+        '--no-gamma',
+        action='store_true',
+        help='Disable gamma exposure filter'
+    )
+    
+    parser.add_argument(
+        '--log-file',
+        type=str,
+        default=None,
+        help='Custom log file path (default: trading_bot.log or {symbol}_bot.log)'
+    )
+    
+    args = parser.parse_args()
+    
+    print("""
+    ╔══════════════════════════════════════════════════════════════╗
+    ║         ToS Signal Trading Bot - Options Trading            ║
+    ║         Based on Auction Market Theory Indicator            ║
+    ╚══════════════════════════════════════════════════════════════╝
+    """)
+    
+    # Check for required environment variables
+    if not os.getenv("SCHWAB_APP_KEY") or not os.getenv("SCHWAB_APP_SECRET"):
+        print("\n⚠️  Missing required environment variables!")
+        print("\nPlease set the following:")
+        print("  export SCHWAB_APP_KEY='your-app-key'")
+        print("  export SCHWAB_APP_SECRET='your-app-secret'")
+        print("\nOptionally:")
+        print("  export SCHWAB_REDIRECT_URI='https://127.0.0.1:8182/callback'")
+        print("\nGet your API credentials from:")
+        print("  https://developer.schwab.com/")
+        return
+    
+    # Load configuration
+    bot_config = BotConfig()
+    
+    # Override config with CLI arguments
+    print("\n🔧 CLI Overrides:")
+    overrides_applied = False
+    
+    if args.symbol:
+        bot_config.trading.symbol = args.symbol.upper()
+        print(f"  ✓ Signal symbol: {bot_config.trading.symbol}")
+        overrides_applied = True
+    
+    if args.execution_symbol:
+        bot_config.trading.execution_symbol = args.execution_symbol.upper()
+        print(f"  ✓ Execution symbol: {bot_config.trading.execution_symbol}")
+        overrides_applied = True
+    
+    if args.butterfly:
+        bot_config.trading.butterfly_mode = True
+        print(f"  ✓ Butterfly mode: ENABLED")
+        overrides_applied = True
+    
+    if args.paper:
+        bot_config.paper_trading = True
+        print(f"  ✓ Paper trading: ENABLED")
+        overrides_applied = True
+    elif args.live:
+        bot_config.paper_trading = False
+        print(f"  ✓ Live trading: ENABLED")
+        overrides_applied = True
+    
+    if args.contracts:
+        bot_config.trading.contracts = args.contracts
+        print(f"  ✓ Contracts: {args.contracts}")
+        overrides_applied = True
+    
+    if args.max_trades:
+        bot_config.trading.max_daily_trades = args.max_trades
+        print(f"  ✓ Max daily trades: {args.max_trades}")
+        overrides_applied = True
+    
+    if args.cooldown:
+        bot_config.signal.signal_cooldown_bars = args.cooldown
+        print(f"  ✓ Signal cooldown: {args.cooldown} bars")
+        overrides_applied = True
+    
+    if args.no_gamma:
+        bot_config.signal.use_gamma_filter = False
+        print(f"  ✓ Gamma filter: DISABLED")
+        overrides_applied = True
+    
+    if not overrides_applied:
+        print("  (none - using config defaults)")
+    
+    # Setup custom log file if specified (useful for multiple instances)
+    if args.log_file:
+        # Add file handler for custom log
+        file_handler = logging.FileHandler(args.log_file)
+        file_handler.setFormatter(et_formatter)
+        logging.root.addHandler(file_handler)
+        print(f"  ✓ Log file: {args.log_file}")
+    elif args.symbol and args.symbol.upper() != 'SPY':
+        # Auto-create symbol-specific log file
+        # Strip leading slash for futures symbols (e.g., /BTC -> btc)
+        safe_symbol = args.symbol.lower().lstrip('/')
+        log_file = f"{safe_symbol}_bot.log"
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setFormatter(et_formatter)
+        logging.root.addHandler(file_handler)
+        print(f"  ✓ Log file: {log_file} (auto-created for {args.symbol.upper()})")
+    
+    # Display configuration
+    print(f"\n📊 Final Configuration:")
+    print(f"  Signal symbol: {bot_config.trading.symbol}")
+    if bot_config.trading.execution_symbol:
+        print(f"  Execution symbol: {bot_config.trading.execution_symbol} (options traded here)")
+    print(f"  Contracts: {bot_config.trading.contracts}")
+    print(f"  Max daily trades: {bot_config.trading.max_daily_trades}")
+    print(f"  Paper trading: {bot_config.paper_trading}")
+    if bot_config.trading.butterfly_mode:
+        print(f"  Butterfly mode: ENABLED (credit spread stacking)")
+    print(f"  RTH only: {bot_config.time.rth_only}")
+    print(f"  OR bias filter: {bot_config.signal.use_or_bias_filter}")
+    print(f"  Signal cooldown: {bot_config.signal.signal_cooldown_bars} bars")
+    print(f"  VIX regime: {bot_config.signal.use_vix_regime}")
+    
+    # Show enabled signals
+    print(f"\n📊 Enabled Signals:")
+    print(f"  LONG: VAL_BOUNCE={bot_config.signal.enable_val_bounce}, BREAKOUT={bot_config.signal.enable_breakout}, SUSTAINED={bot_config.signal.enable_sustained_breakout}")
+    print(f"  SHORT: VAH_REJECTION={bot_config.signal.enable_vah_rejection}, BREAKDOWN={bot_config.signal.enable_breakdown}, SUSTAINED={bot_config.signal.enable_sustained_breakdown}")
+    
+    if bot_config.paper_trading:
+        print("\n📝 PAPER TRADING MODE - No real orders will be placed")
+    else:
+        print("\n⚠️  LIVE TRADING MODE - Real orders will be placed!")
+        if args.no_confirm:
+            print("   (--no-confirm flag set, skipping confirmation)")
+        else:
+            confirm = input("Type 'CONFIRM' to proceed: ")
+            if confirm != "CONFIRM":
+                print("Aborted.")
+                return
+    
+    # Create and start bot
+    bot = TradingBot(bot_config)
+    
+    print(f"\n🚀 Starting {bot_config.trading.symbol} bot...")
+    bot.start()
+
+
+if __name__ == "__main__":
+    main()

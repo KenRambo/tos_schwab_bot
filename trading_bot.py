@@ -440,9 +440,147 @@ class TradingBot:
             logger.info("Will only process bars AFTER this timestamp")
             logger.info("")
             
+            # Scan historical bars for missed signals
+            self._scan_for_missed_signals(bars_to_process)
+            
         except Exception as e:
             logger.warning(f"Could not load historical bars: {e}")
             logger.info("Starting fresh - detector will build state from live data")
+    
+    def _scan_for_missed_signals(self, bars_data: list):
+        """
+        Scan historical bars for signals that occurred while bot was offline.
+        Does NOT trade - just reports what was missed.
+        """
+        try:
+            from signal_detector import SignalDetector, Bar
+            
+            logger.info("")
+            logger.info("╔════════════════════════════════════════════════════════════╗")
+            logger.info("║          SCANNING FOR MISSED SIGNALS...                    ║")
+            logger.info("╚════════════════════════════════════════════════════════════╝")
+            
+            # Create a temporary detector with same settings
+            temp_detector = SignalDetector(
+                length_period=self.config.signal.length_period,
+                value_area_percent=self.config.signal.value_area_percent,
+                volume_threshold=self.config.signal.volume_threshold,
+                use_relaxed_volume=self.config.signal.use_relaxed_volume,
+                min_confirmation_bars=self.config.signal.min_confirmation_bars,
+                sustained_bars_required=self.config.signal.sustained_bars_required,
+                signal_cooldown_bars=self.config.signal.signal_cooldown_bars,
+                use_or_bias_filter=self.config.signal.use_or_bias_filter,
+                or_buffer_points=self.config.signal.or_buffer_points,
+                use_time_filter=self.config.time.use_time_filter,
+                rth_only=self.config.time.rth_only,
+                use_vix_regime=self.config.signal.use_vix_regime,
+                vix_high_threshold=self.config.signal.vix_high_threshold,
+                vix_low_threshold=self.config.signal.vix_low_threshold,
+                high_vol_cooldown_mult=self.config.signal.high_vol_cooldown_mult,
+                low_vol_cooldown_mult=self.config.signal.low_vol_cooldown_mult,
+                enable_val_bounce=self.config.signal.enable_val_bounce,
+                enable_poc_reclaim=self.config.signal.enable_poc_reclaim,
+                enable_breakout=self.config.signal.enable_breakout,
+                enable_sustained_breakout=self.config.signal.enable_sustained_breakout,
+                enable_prior_val_bounce=self.config.signal.enable_prior_val_bounce,
+                enable_prior_poc_reclaim=self.config.signal.enable_prior_poc_reclaim,
+                enable_vah_rejection=self.config.signal.enable_vah_rejection,
+                enable_poc_breakdown=self.config.signal.enable_poc_breakdown,
+                enable_breakdown=self.config.signal.enable_breakdown,
+                enable_sustained_breakdown=self.config.signal.enable_sustained_breakdown,
+                enable_prior_vah_rejection=self.config.signal.enable_prior_vah_rejection,
+                enable_prior_poc_breakdown=self.config.signal.enable_prior_poc_breakdown
+            )
+            
+            missed_signals = []
+            
+            # Process each bar and look for signals
+            for bar_data in bars_data:
+                bar = Bar(
+                    timestamp=bar_data['datetime'],
+                    open=bar_data['open'],
+                    high=bar_data['high'],
+                    low=bar_data['low'],
+                    close=bar_data['close'],
+                    volume=bar_data['volume']
+                )
+                
+                # Don't suppress signals - we want to find them
+                signal = temp_detector.add_bar(bar, suppress_signals=False)
+                
+                if signal:
+                    # Apply gamma filter if enabled
+                    gamma_blocked = False
+                    if self.gamma_context and self.config.signal.use_gamma_filter:
+                        # Update gamma context for this bar's time/price
+                        self.gamma_context.update(bar.close, bar.timestamp)
+                        allowed, reason = self.gamma_context.should_allow_signal(
+                            signal.signal_type.value,
+                            signal.direction.value
+                        )
+                        if not allowed:
+                            gamma_blocked = True
+                            signal.reason = f"{signal.reason} [BLOCKED BY GAMMA]"
+                    
+                    missed_signals.append({
+                        'signal': signal,
+                        'time': bar.timestamp,
+                        'gamma_blocked': gamma_blocked
+                    })
+            
+            # Report findings
+            if missed_signals:
+                logger.info("")
+                logger.info(f"⚠️  FOUND {len(missed_signals)} SIGNAL(S) WHILE OFFLINE:")
+                logger.info("")
+                
+                for i, ms in enumerate(missed_signals, 1):
+                    sig = ms['signal']
+                    time_str = ms['time'].strftime('%H:%M:%S ET')
+                    blocked_str = " [GAMMA BLOCKED]" if ms['gamma_blocked'] else ""
+                    emoji = "📈" if sig.direction.value == "LONG" else "📉"
+                    
+                    logger.info(f"  {i}. {emoji} {sig.signal_type.value} - {sig.direction.value} @ ${sig.price:.2f} ({time_str}){blocked_str}")
+                
+                # Highlight the most recent signal
+                most_recent = missed_signals[-1]
+                sig = most_recent['signal']
+                logger.info("")
+                logger.info("=" * 60)
+                
+                if most_recent['gamma_blocked']:
+                    logger.info(f"📊 MOST RECENT SIGNAL (blocked by gamma):")
+                    logger.info(f"   {sig.signal_type.value} - {sig.direction.value} @ ${sig.price:.2f}")
+                    logger.info(f"   Time: {most_recent['time'].strftime('%H:%M:%S ET')}")
+                    logger.info(f"   Status: Would have been blocked by gamma filter")
+                else:
+                    logger.info(f"🚨 MOST RECENT SIGNAL (MISSED):")
+                    logger.info(f"   {sig.signal_type.value} - {sig.direction.value} @ ${sig.price:.2f}")
+                    logger.info(f"   Time: {most_recent['time'].strftime('%H:%M:%S ET')}")
+                    logger.info(f"   VAH: ${sig.vah:.2f} | POC: ${sig.poc:.2f} | VAL: ${sig.val:.2f}")
+                    logger.info(f"   ⚠️  Consider manual entry if still valid!")
+                
+                logger.info("=" * 60)
+                logger.info("")
+                
+                # Send notification for missed signal
+                if not most_recent['gamma_blocked']:
+                    try:
+                        self.notifier.send(
+                            title=f"⚠️ Missed Signal: {sig.signal_type.value}",
+                            message=f"{sig.direction.value} @ ${sig.price:.2f}\nTime: {most_recent['time'].strftime('%H:%M ET')}\nBot was offline - consider manual entry",
+                            sound="intermission"
+                        )
+                    except:
+                        pass  # Notification failure shouldn't break startup
+            else:
+                logger.info("✓ No signals occurred while offline")
+                logger.info("")
+                
+        except Exception as e:
+            logger.warning(f"Could not scan for missed signals: {e}")
+            import traceback
+            traceback.print_exc()
     
     def _log_initial_state(self):
         """Log initial market state on startup"""
