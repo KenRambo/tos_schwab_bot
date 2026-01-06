@@ -127,11 +127,16 @@ class SignalConfig:
     high_vol_cooldown_mult: float = 1.43  # OPTIMIZED
     low_vol_cooldown_mult: float = 0.88  # OPTIMIZED
     
+    # Gamma Exposure Filter
+    use_gamma_filter: bool = True  # Filter signals based on gamma regime
+    gamma_neutral_zone: float = 5.0  # Points from ZG to consider neutral
+    gamma_strike_width: int = 5  # Strike rounding for zero gamma calc
+    
     # Signal Enables - OPTIMIZED
     # Long signals
     enable_val_bounce: bool = True  # OPTIMIZED - ENABLED
     enable_poc_reclaim: bool = False  # OPTIMIZED - DISABLED
-    enable_breakout: bool = False  # OPTIMIZED - DISABLED
+    enable_breakout: bool = True  # OPTIMIZED - DISABLED --> manually enabled w/GEX filter
     enable_sustained_breakout: bool = False  # OPTIMIZED - DISABLED
     
     # Short signals

@@ -38,6 +38,7 @@ from signal_detector import SignalDetector, Signal, Bar, Direction
 from position_manager import PositionManager
 from notifications import get_notifier, PushoverNotifier
 from analytics import get_tracker, PerformanceTracker
+from gamma_context import GammaContext, GammaRegime
 
 # Eastern timezone
 try:
@@ -106,6 +107,10 @@ class TradingBot:
         self._last_processed_bar_time: Optional[datetime] = None  # Track actual bar timestamps
         self.last_price: float = 0
         self.bar_interval_seconds = 300  # 5-minute bars
+        
+        # Gamma context for signal filtering
+        self.gamma_context: Optional[GammaContext] = None
+        self._today_open_price: Optional[float] = None  # Track today's open for gamma calc
         
         # Intra-bar tracking
         self._current_bar_period: Optional[int] = None  # Which 5-min period we're in
@@ -243,6 +248,17 @@ class TradingBot:
             if self.config.trading.execution_symbol:
                 logger.info(f"Symbol mapping: {self.config.trading.symbol} signals → {option_symbol} options")
             
+            # Initialize gamma context for signal filtering
+            self.gamma_context: Optional[GammaContext] = None
+            if self.config.signal.use_gamma_filter:
+                self.gamma_context = GammaContext(
+                    symbol=self.config.trading.symbol,
+                    enable_filtering=True,
+                    neutral_zone_points=self.config.signal.gamma_neutral_zone,
+                    strike_width=self.config.signal.gamma_strike_width
+                )
+                logger.info("Gamma context initialized - signal filtering enabled")
+            
             # Sync with broker if live trading
             if not self.config.paper_trading:
                 self.position_manager.sync_with_broker()
@@ -282,6 +298,14 @@ class TradingBot:
                        f"POC_BREAKDOWN={self.config.signal.enable_poc_breakdown}, "
                        f"BREAKDOWN={self.config.signal.enable_breakdown}, "
                        f"SUSTAINED_BREAKDOWN={self.config.signal.enable_sustained_breakdown}")
+            
+            # Log filter status
+            logger.info("Filters:")
+            logger.info(f"  OR Bias Filter: {self.config.signal.use_or_bias_filter}")
+            logger.info(f"  VIX Regime: {self.config.signal.use_vix_regime}")
+            logger.info(f"  Gamma Filter: {self.config.signal.use_gamma_filter}"
+                       + (f" (neutral zone: ±{self.config.signal.gamma_neutral_zone}pts)" 
+                          if self.config.signal.use_gamma_filter else ""))
             
             # Load historical bars to initialize detector
             self._load_historical_bars()
@@ -585,6 +609,24 @@ class TradingBot:
         except:
             pass  # VIX not available, use default
         
+        # Track today's open for gamma calculation (first bar of RTH)
+        if bar.timestamp:
+            bar_time = bar.timestamp.time() if hasattr(bar.timestamp, 'time') else None
+            if bar_time:
+                from datetime import time as dt_time
+                # First bar of RTH (9:30-9:35)
+                if dt_time(9, 30) <= bar_time < dt_time(9, 35):
+                    if self._today_open_price is None or bar.timestamp.date() != getattr(self, '_today_open_date', None):
+                        self._today_open_price = bar.open
+                        self._today_open_date = bar.timestamp.date()
+                        if self.gamma_context:
+                            self.gamma_context.set_today_open(bar.open)
+                            logger.info(f"  Gamma: Today's open set to ${bar.open:.2f}")
+        
+        # Update gamma context with current price
+        if self.gamma_context:
+            self.gamma_context.update(bar.close, get_et_now())
+        
         # Add bar to detector and check for signals
         signal = self.detector.add_bar(bar)
         
@@ -623,6 +665,10 @@ class TradingBot:
         else:
             logger.info(f"  OR: Building... (completes at 10:00 ET)")
         
+        # Gamma context status
+        if self.gamma_context and self.gamma_context.levels:
+            self.gamma_context.log_status()
+        
         # Position status
         pos = self.position_manager.get_position_summary()
         if pos['status'] != 'FLAT':
@@ -635,6 +681,17 @@ class TradingBot:
             vix_info = f" (VIX: {state.get('vix', 20):.1f})" if self.config.signal.use_vix_regime else ""
             logger.info(f"  Cooldown: {cooldown}/{effective_cooldown} bars{vix_info}")
         
+        # Apply gamma filter to signal
+        if signal and self.gamma_context:
+            allowed, reason = self.gamma_context.should_allow_signal(
+                signal.signal_type.value,
+                signal.direction.value
+            )
+            if not allowed:
+                logger.info("")
+                logger.info(f"⚠️ Signal blocked by gamma filter: {reason}")
+                signal = None  # Block the signal
+        
         if signal:
             self.signals_generated += 1
             logger.info("")
@@ -643,6 +700,8 @@ class TradingBot:
             logger.info(f"🚨 Price: ${signal.price:.2f}")
             logger.info(f"🚨 VAH: ${signal.vah:.2f}, POC: ${signal.poc:.2f}, VAL: ${signal.val:.2f}")
             logger.info(f"🚨 OR Bias: {'BULL' if signal.or_bias == 1 else 'BEAR' if signal.or_bias == -1 else 'NEUTRAL'}")
+            if self.gamma_context and self.gamma_context.levels:
+                logger.info(f"🚨 Gamma: {self.gamma_context.regime.value} | ZG: ${self.gamma_context.levels.zero_gamma:.0f}")
             logger.info(f"🚨 Reason: {signal.reason}")
             logger.info("🚨 " + "=" * 50)
             logger.info("")
@@ -1060,6 +1119,12 @@ Running multiple symbols as daemons:
     )
     
     parser.add_argument(
+        '--no-gamma',
+        action='store_true',
+        help='Disable gamma exposure filter'
+    )
+    
+    parser.add_argument(
         '--log-file',
         type=str,
         default=None,
@@ -1131,6 +1196,11 @@ Running multiple symbols as daemons:
     if args.cooldown:
         bot_config.signal.signal_cooldown_bars = args.cooldown
         print(f"  ✓ Signal cooldown: {args.cooldown} bars")
+        overrides_applied = True
+    
+    if args.no_gamma:
+        bot_config.signal.use_gamma_filter = False
+        print(f"  ✓ Gamma filter: DISABLED")
         overrides_applied = True
     
     if not overrides_applied:

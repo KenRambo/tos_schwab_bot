@@ -42,6 +42,37 @@ python trading_bot.py --symbol /ES --execution-symbol SPX --butterfly
 - On SHORT signal → Opens put butterfly on SPX
 - Collects credit on each butterfly for "credit stacking" strategy
 
+## 📊 Gamma Exposure Filter (New!)
+
+Filters signals based on dealer gamma positioning to avoid trading against market makers:
+
+| Gamma Regime | Dealer Position | Market Behavior | Signal Filtering |
+|--------------|-----------------|-----------------|------------------|
+| **Positive** (above ZG) | Long gamma | Mean reversion | ✅ VAL/VAH signals, ❌ Breakouts blocked |
+| **Neutral** (near ZG) | Mixed | Choppy | ✅ All signals allowed |
+| **Negative** (below ZG) | Short gamma | Trending/momentum | ✅ All signals, ⚠️ Fades risky |
+
+**How it works:**
+- Calculates Zero Gamma (ZG) level based on today's open price
+- ZG anchors near open early in day, drifts toward current price as day progresses
+- Above ZG = dealers fade moves (mean reversion works)
+- Below ZG = dealers chase moves (momentum works)
+
+```bash
+# Gamma filter enabled by default
+./bot.sh start /ES -e SPX --butterfly
+
+# Disable gamma filter
+./bot.sh start /ES -e SPX --butterfly --no-gamma
+```
+
+**Log output:**
+```
+  Gamma: 🟢 POSITIVE | ZG: $6955 | Bias: FADE MOVES
+  Levels: PUT₁ $6930 | ZG $6955 | CALL₁ $6980
+  Price vs ZG: $6968.75 (+13.75)
+```
+
 ## 🔧 Recent Bug Fixes (January 6, 2026)
 
 | Bug | Symptom | Fix |
@@ -100,6 +131,7 @@ The bot implements your "hold until opposite signal" strategy - positions are he
 - **Signal Cooldown** - 17 bars (~85 min on 5-min chart) between signals
 - **Daily Trade Limit** - Maximum 6 trades per day
 - **VIX Regime** - Adjusts cooldown based on volatility (handles VIX=0 gracefully)
+- **Gamma Exposure Filter** - Blocks breakouts in positive gamma, warns on fades in negative gamma
 
 ### Symbol Mapping
 
@@ -226,6 +258,7 @@ Options:
   --contracts, -c N            Contracts per trade
   --max-trades, -m N           Max trades per day
   --cooldown N                 Signal cooldown in bars
+  --no-gamma                   Disable gamma exposure filter
   --no-confirm, -y             Skip confirmation (for daemons)
   --log-file PATH              Custom log file
 ```
@@ -348,6 +381,11 @@ class SignalConfig:
     vix_low_threshold: int = 15
     high_vol_cooldown_mult: float = 1.43   # Longer cooldown in high VIX
     low_vol_cooldown_mult: float = 0.88    # Shorter cooldown in low VIX
+    
+    # Gamma Exposure Filter
+    use_gamma_filter: bool = True          # Filter based on dealer gamma
+    gamma_neutral_zone: float = 5.0        # Points from ZG to be neutral
+    gamma_strike_width: int = 5            # Strike rounding ($5 for SPX)
 ```
 
 ### Paper Trading vs Live Trading
@@ -378,6 +416,7 @@ tos_schwab_bot/
 ├── config.py            # Configuration settings (auto-generated)
 ├── signal_detector.py   # Signal detection logic
 ├── position_manager.py  # Position/trade management (supports butterflies)
+├── gamma_context.py     # Gamma exposure calculations and filtering (NEW)
 ├── schwab_auth.py       # OAuth2 authentication
 ├── schwab_client.py     # Schwab API client
 ├── notifications.py     # Pushover push notifications
@@ -401,8 +440,8 @@ tos_schwab_bot/
 ├── recommended_config_consensus.json  # Conservative consensus config
 │
 ├── # ThinkScript Studies
-├── AMT_V36_OPTIMIZED.ts     # Latest optimized study (RTH cooldown reset)
-├── AMT_V35_Optimized.ts     # Previous version
+├── AMT_V37_OPTIMIZED.ts     # Latest (gamma filter, completed bar filter)
+├── AMT_V36_OPTIMIZED.ts     # Previous version
 │
 ├── # Utilities
 ├── requirements.txt     # Python dependencies
@@ -812,13 +851,27 @@ The Python signal detection mirrors your ToS script logic:
 2025-01-02 10:30:05 ET - INFO -   Volume: 1,245,678
 2025-01-02 10:30:05 ET - INFO -   VAH: $592.10 | POC: $591.50 | VAL: $590.25
 2025-01-02 10:30:05 ET - INFO -   OR Range: $589.50 - $591.75 | Bias: BULLISH
+2025-01-02 10:30:05 ET - INFO -   Gamma: 🟢 POSITIVE | ZG: $590 | Bias: FADE MOVES
+2025-01-02 10:30:05 ET - INFO -   Levels: PUT₁ $585 | ZG $590 | CALL₁ $595
+2025-01-02 10:30:05 ET - INFO -   Price vs ZG: $591.25 (+1.25)
 2025-01-02 10:30:05 ET - INFO - 
 2025-01-02 10:30:05 ET - INFO - 🚨 SIGNAL: VAL_BOUNCE - LONG
+2025-01-02 10:30:05 ET - INFO - 🚨 Gamma: POSITIVE | ZG: $590
 2025-01-02 10:30:05 ET - INFO - Position sizing: $10,000.00 balance, 2.0% risk = 3 contracts
 2025-01-02 10:30:05 ET - INFO - Delta exposure OK: 0 + 30 = 30 (max: 100)
 2025-01-02 10:30:05 ET - INFO - Looking for CALL option, SPY @ $591.25, target delta: 67%
 2025-01-02 10:30:05 ET - INFO - Selected: SPY250102C00593000 | Strike: 593.0 | Delta: 0.67
 2025-01-02 10:30:05 ET - INFO - Trade executed: T00001
+```
+
+### Signal Blocked by Gamma Filter
+
+```
+2025-01-02 11:45:05 ET - INFO - ─── Bar #57 | 11:45:05 ET ───
+2025-01-02 11:45:05 ET - INFO -   Price: $593.50 (O:593.00 H:593.75 L:592.80)
+2025-01-02 11:45:05 ET - INFO -   Gamma: 🟢 POSITIVE | ZG: $591 | Bias: FADE MOVES
+2025-01-02 11:45:05 ET - INFO - 
+2025-01-02 11:45:05 ET - INFO - ⚠️ Signal blocked by gamma filter: ✗ BREAKOUT blocked in +gamma (breakouts get faded)
 ```
 
 ### Butterfly Mode (--butterfly)
@@ -856,6 +909,7 @@ The Python signal detection mirrors your ToS script logic:
 6. **Confirmation Required** - Must type "CONFIRM" for live mode
 7. **Buying Power Check** - Validates funds before each trade
 8. **Drawdown Alerts** - Notifies when down 10%+ from peak
+9. **Gamma Filter** - Blocks momentum signals in mean-reversion environments
 
 ## Troubleshooting
 
@@ -899,6 +953,15 @@ The Python signal detection mirrors your ToS script logic:
 - Test with: `python -c "from notifications import get_notifier; get_notifier().send('Test', 'Test')"`
 
 ## Changelog
+
+### v1.3 (January 6, 2026)
+- **NEW:** Gamma exposure filter (`use_gamma_filter`) - filters signals based on dealer gamma positioning
+- **NEW:** `gamma_context.py` module for zero gamma calculation and regime detection
+- **NEW:** `--no-gamma` CLI flag to disable gamma filtering
+- **NEW:** Gamma levels plotted on ToS chart (Zero Gamma, Call γ1, Put γ1)
+- **NEW:** `onlyCompletedBars` in ToS study - prevents false signals that disappear before bar closes
+- **UPDATED:** ToS study to V3.7 with gamma filter integration
+- **UPDATED:** Bot logs gamma regime and levels each bar
 
 ### v1.2 (January 6, 2026)
 - **NEW:** Butterfly credit spread mode (`--butterfly` flag)
