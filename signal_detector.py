@@ -210,6 +210,10 @@ class SignalDetector:
         if not self.use_vix_regime:
             return self.signal_cooldown_bars
         
+        # Treat VIX=0 or negative as unavailable, use default cooldown
+        if self.current_vix <= 0:
+            return self.signal_cooldown_bars
+        
         if self.current_vix >= self.vix_high_threshold:
             # High volatility - longer cooldown
             return round(self.signal_cooldown_bars * self.high_vol_cooldown_mult)

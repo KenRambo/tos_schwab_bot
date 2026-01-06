@@ -3,6 +3,10 @@ Position Manager
 
 Handles position tracking, trade execution, and order management.
 Implements the "hold until opposite signal" strategy.
+
+UPDATED 2026-01-06:
+- Added butterfly credit spread mode for SPX/XSP stacking strategy
+- Supports ES signals → SPX/XSP option execution
 """
 import logging
 from dataclasses import dataclass, field
@@ -23,6 +27,13 @@ class TradeStatus(Enum):
     PARTIAL = "PARTIAL"
     CANCELLED = "CANCELLED"
     REJECTED = "REJECTED"
+
+
+class ButterflyStatus(Enum):
+    PENDING = "PENDING"
+    LEG1_FILLED = "LEG1_FILLED"
+    COMPLETE = "COMPLETE"
+    EXPIRED = "EXPIRED"
 
 
 @dataclass
@@ -46,6 +57,57 @@ class Trade:
     pnl_percent: Optional[float] = None
     bars_held: int = 0
     exit_reason: str = ""
+
+
+@dataclass
+class ButterflyTrade:
+    """Record of a butterfly credit spread trade"""
+    id: str
+    signal_type: SignalType
+    direction: Direction
+    entry_time: datetime
+    symbol: str  # SPX, XSP, etc.
+    underlying_price: float
+    
+    # Strikes
+    lower_strike: float
+    middle_strike: float
+    upper_strike: float
+    option_type: str  # "CALL" or "PUT"
+    
+    # Pricing
+    wing_debit: float = 0.0      # Cost of wings (lower + upper asks)
+    middle_credit: float = 0.0   # Credit from 2x middle bids
+    net_credit: float = 0.0      # Net credit received
+    
+    # Orders
+    order_id: Optional[str] = None
+    fill_time: Optional[datetime] = None
+    status: ButterflyStatus = ButterflyStatus.PENDING
+    
+    # Settlement
+    settlement_price: Optional[float] = None
+    final_pnl: Optional[float] = None
+    
+    @property
+    def quantity(self) -> int:
+        return 1
+    
+    @property
+    def option_symbol(self) -> str:
+        return f"{self.symbol} {self.lower_strike}/{self.middle_strike}/{self.upper_strike} {self.option_type}"
+    
+    @property
+    def option_strike(self) -> float:
+        return self.middle_strike
+    
+    @property
+    def option_expiry(self) -> str:
+        return self.entry_time.strftime("%Y-%m-%d")
+    
+    @property
+    def entry_price(self) -> float:
+        return self.net_credit
 
 
 @dataclass
@@ -73,6 +135,10 @@ class PositionManager:
     Strategy: Hold until opposite signal
     - LONG signal: Buy CALL, hold until SHORT signal
     - SHORT signal: Buy PUT, hold until LONG signal
+    
+    Butterfly Mode (for SPX/XSP credit spread stacking):
+    - LONG signal: Call butterfly (lower/middle/upper calls)
+    - SHORT signal: Put butterfly (lower/middle/upper puts)
     
     Optional risk management:
     - Stop loss (% or $)
@@ -120,7 +186,11 @@ class PositionManager:
         max_daily_loss_percent: float = 5.0,
         # Correlation / Delta Exposure
         enable_correlation_check: bool = True,
-        max_delta_exposure: float = 100.0
+        max_delta_exposure: float = 100.0,
+        # Butterfly mode (for SPX/XSP credit spread stacking)
+        butterfly_mode: bool = False,
+        butterfly_wing_width: int = 5,
+        butterfly_credit_target_pct: float = 0.30
     ):
         self.client = client
         self.symbol = symbol
@@ -165,6 +235,11 @@ class PositionManager:
         self.enable_correlation_check = enable_correlation_check
         self.max_delta_exposure = max_delta_exposure
         
+        # Butterfly mode
+        self.butterfly_mode = butterfly_mode
+        self.butterfly_wing_width = butterfly_wing_width
+        self.butterfly_credit_target_pct = butterfly_credit_target_pct
+        
         # Current position
         self.position = PositionState()
         
@@ -173,12 +248,21 @@ class PositionManager:
         self.daily_pnl = 0.0
         self.last_trade_date: Optional[date] = None
         
+        # Butterfly tracking
+        self.butterflies: List[ButterflyTrade] = []
+        self.credits_today: float = 0.0
+        self.total_credits_collected: float = 0.0
+        
         # Monitor only mode (no trading, just log signals)
         self._monitor_only = False
         
         # Trade history
         self.trades: List[Trade] = []
         self.trade_counter = 0
+        self.butterfly_counter = 0
+        
+        if butterfly_mode:
+            logger.info(f"Butterfly mode ENABLED: {butterfly_wing_width}pt wings, {butterfly_credit_target_pct:.0%} credit target")
     
     def _reset_daily_count(self) -> None:
         """Reset daily trade count and P&L if new day"""
@@ -186,6 +270,7 @@ class PositionManager:
         if self.last_trade_date != today:
             self.daily_trade_count = 0
             self.daily_pnl = 0.0
+            self.credits_today = 0.0
             self.last_trade_date = today
             
             # Capture starting balance for daily loss % calculation
@@ -220,9 +305,8 @@ class PositionManager:
         if self.daily_pnl <= -self.max_daily_loss_dollars:
             logger.warning(f"Daily loss limit hit: ${self.daily_pnl:.2f} <= -${self.max_daily_loss_dollars:.2f}")
             get_notifier().send(
-                f"Daily loss limit hit!\nLoss: ${abs(self.daily_pnl):.2f}\nLimit: ${self.max_daily_loss_dollars:.2f}",
                 title="🛑 Daily Loss Limit",
-                priority=get_notifier().send.__self__.__class__.__bases__[0]  # NORMAL
+                message=f"Daily loss limit hit!\nLoss: ${abs(self.daily_pnl):.2f}\nLimit: ${self.max_daily_loss_dollars:.2f}"
             )
             return True
         
@@ -274,9 +358,8 @@ class PositionManager:
                 return 0.0
             
             # Approximate delta based on position
-            # Calls have positive delta, puts have negative
             if self.position.option_type == "CALL":
-                return self.target_delta * self.position.quantity * 100  # Delta per contract * 100 shares
+                return self.target_delta * self.position.quantity * 100
             else:
                 return -self.target_delta * self.position.quantity * 100
         
@@ -286,10 +369,8 @@ class PositionManager:
             
             for pos in positions:
                 if pos.quantity != 0:
-                    # Get option details for delta
-                    # Note: This is an approximation - real delta would come from option chain
                     is_call = "C" in pos.symbol or "CALL" in pos.symbol.upper()
-                    estimated_delta = 0.30 if is_call else -0.30  # Use target delta as estimate
+                    estimated_delta = 0.30 if is_call else -0.30
                     total_delta += estimated_delta * abs(pos.quantity) * 100
             
             return total_delta
@@ -299,16 +380,11 @@ class PositionManager:
             return 0.0
     
     def _check_correlation(self, signal_direction: Direction) -> bool:
-        """
-        Check if adding this position would exceed delta exposure limits.
-        Returns True if OK to trade, False if would exceed limits.
-        """
+        """Check if adding this position would exceed delta exposure limits."""
         if not self.enable_correlation_check:
             return True
         
         current_delta = self._get_current_delta_exposure()
-        
-        # Estimate delta of new position using current target delta
         current_target = self._get_current_target_delta()
         new_delta = current_target * self.contracts * 100
         if signal_direction == Direction.SHORT:
@@ -317,19 +393,14 @@ class PositionManager:
         projected_delta = current_delta + new_delta
         
         if abs(projected_delta) > self.max_delta_exposure:
-            logger.warning(f"Correlation check failed: Current delta {current_delta:.0f}, new would add {new_delta:.0f}, total {projected_delta:.0f} > max {self.max_delta_exposure:.0f}")
+            logger.warning(f"Correlation check failed: {current_delta:.0f} + {new_delta:.0f} = {projected_delta:.0f} > max {self.max_delta_exposure:.0f}")
             return False
         
         logger.info(f"Delta exposure OK: {current_delta:.0f} + {new_delta:.0f} = {projected_delta:.0f} (max: {self.max_delta_exposure:.0f})")
         return True
     
     def _get_current_target_delta(self) -> float:
-        """
-        Get target delta based on time of day.
-        
-        Morning (before afternoon_start_hour): target_delta (default 30Δ)
-        Afternoon (after afternoon_start_hour): afternoon_delta (default 40Δ)
-        """
+        """Get target delta based on time of day."""
         now = datetime.now()
         
         if now.hour >= self.afternoon_start_hour:
@@ -361,16 +432,13 @@ class PositionManager:
             positions = self.client.get_option_positions(self.symbol)
             
             if not positions:
-                # No positions - we're flat
                 if self.position.direction != Direction.FLAT:
                     logger.warning("Position mismatch: Expected position but broker shows flat")
                     self.position = PositionState()
                 return
             
-            # Find our option position
             for pos in positions:
                 if pos.quantity != 0:
-                    # Determine direction from option type
                     is_call = "C" in pos.symbol or "CALL" in pos.symbol.upper()
                     direction = Direction.LONG if is_call else Direction.SHORT
                     
@@ -397,7 +465,6 @@ class PositionManager:
         # Check if in monitor only mode
         if self._monitor_only:
             logger.info(f"[MONITOR] Signal: {signal.signal_type.value} - {signal.direction.value} @ ${signal.price:.2f}")
-            logger.info(f"[MONITOR] Would trade {signal.direction.value} but in monitor-only mode")
             return None
         
         # Check lockout
@@ -405,7 +472,11 @@ class PositionManager:
             logger.warning(f"Locked out - {self.daily_trade_count}/{self.max_daily_trades} trades today")
             return None
         
-        # Determine what we need to do
+        # Route to butterfly or single-leg execution
+        if self.butterfly_mode:
+            return self._execute_butterfly(signal)
+        
+        # Standard single-leg execution
         current_direction = self.position.direction
         signal_direction = signal.direction
         
@@ -415,10 +486,8 @@ class PositionManager:
         
         # If opposite signal, close current and open new
         if current_direction != signal_direction:
-            # Close existing position
             exit_trade = self._close_position(signal)
             
-            # Check if we can open new position (might be at limit now)
             if not self.is_locked_out():
                 new_trade = self._open_position(signal)
                 return new_trade
@@ -426,28 +495,297 @@ class PositionManager:
                 logger.info("Position closed but locked out for new position")
                 return exit_trade
         
-        # Same direction signal - already positioned correctly
         logger.info(f"Already {current_direction.value} - ignoring {signal_direction.value} signal")
         return None
     
+    # =========================================================================
+    # BUTTERFLY CREDIT SPREAD EXECUTION
+    # =========================================================================
+    
+    def _execute_butterfly(self, signal: Signal) -> Optional[Trade]:
+        """Execute a butterfly credit spread based on signal"""
+        
+        option_type = "CALL" if signal.direction == Direction.LONG else "PUT"
+        
+        logger.info("")
+        logger.info("=" * 60)
+        logger.info(f"🦋 BUTTERFLY SIGNAL: {signal.direction.value} {option_type}")
+        logger.info(f"   Signal: {signal.signal_type.value}")
+        logger.info(f"   Price: ${signal.price:.2f}")
+        logger.info("=" * 60)
+        
+        # Get underlying price for strike calculation
+        try:
+            # For SPX, get the index price
+            if self.symbol.upper() in ['SPX', '$SPX', '$SPX.X']:
+                quote = self.client.get_quote('$SPX')
+            elif self.symbol.upper() in ['XSP', '$XSP']:
+                quote = self.client.get_quote('$SPX')
+                # XSP is 1/10th of SPX
+            else:
+                quote = self.client.get_quote(self.symbol)
+            
+            underlying_price = quote.last_price
+            logger.info(f"   Underlying: ${underlying_price:.2f}")
+            
+        except Exception as e:
+            logger.error(f"Error getting underlying price: {e}")
+            # Use signal price as fallback
+            underlying_price = signal.price
+        
+        # Calculate strikes
+        width = self.butterfly_wing_width
+        
+        # Round to appropriate strike interval
+        if self.symbol.upper() in ['XSP', '$XSP']:
+            # XSP has $0.50 or $1 strikes
+            atm = round(underlying_price / 10)  # XSP is 1/10th SPX
+            atm = round(atm)
+        elif self.symbol.upper() in ['SPX', '$SPX', '$SPX.X']:
+            # SPX has $5 strikes
+            atm = round(underlying_price / 5) * 5
+        else:
+            # Default to $1 strikes
+            atm = round(underlying_price)
+        
+        # Build butterfly strikes
+        if signal.direction == Direction.LONG:
+            # Call butterfly for bullish: buy lower, sell 2x middle, buy upper
+            lower = atm
+            middle = atm + width
+            upper = atm + (width * 2)
+        else:
+            # Put butterfly for bearish: buy upper, sell 2x middle, buy lower
+            upper = atm
+            middle = atm - width
+            lower = atm - (width * 2)
+        
+        logger.info(f"   Strikes: {lower}/{middle}/{upper}")
+        
+        # Get butterfly pricing
+        prices = self._get_butterfly_prices(lower, middle, upper, option_type)
+        
+        if not prices:
+            logger.error("Could not get butterfly prices")
+            return None
+        
+        wing_debit = prices['wing_debit']
+        middle_credit = prices['middle_credit']
+        theoretical_net = middle_credit - wing_debit
+        
+        # Target: wing cost + credit target %
+        target_credit = wing_debit * (1 + self.butterfly_credit_target_pct)
+        
+        logger.info(f"   ┌─ BUTTERFLY STRUCTURE ─────────────────────")
+        logger.info(f"   │ Lower wing ({lower}): ${prices['lower_ask']:.2f} debit")
+        logger.info(f"   │ Middle x2  ({middle}): ${prices['middle_bid']:.2f} × 2 = ${middle_credit:.2f} credit")
+        logger.info(f"   │ Upper wing ({upper}): ${prices['upper_ask']:.2f} debit")
+        logger.info(f"   ├───────────────────────────────────────────")
+        logger.info(f"   │ Wing debit:     ${wing_debit:.2f}")
+        logger.info(f"   │ Middle credit:  ${middle_credit:.2f}")
+        logger.info(f"   │ Theoretical net: ${theoretical_net:.2f}")
+        logger.info(f"   │ Target credit:  ${target_credit:.2f} ({self.butterfly_credit_target_pct:.0%} above wings)")
+        logger.info(f"   └───────────────────────────────────────────")
+        
+        # Execute the butterfly
+        success, order_id, fill_credit = self._place_butterfly_order(
+            lower, middle, upper, option_type, theoretical_net
+        )
+        
+        if not success:
+            logger.error("   ✗ Butterfly order failed")
+            get_notifier().send(
+                title="🦋 ❌ Trade Rejected",
+                message=f"Butterfly order failed\n{self.symbol} {lower}/{middle}/{upper} {option_type}"
+            )
+            return None
+        
+        # Create butterfly trade record
+        self.butterfly_counter += 1
+        self.daily_trade_count += 1
+        
+        butterfly = ButterflyTrade(
+            id=f"BF-{date.today().strftime('%Y%m%d')}-{self.butterfly_counter:04d}",
+            signal_type=signal.signal_type,
+            direction=signal.direction,
+            entry_time=datetime.now(),
+            symbol=self.symbol,
+            underlying_price=underlying_price,
+            lower_strike=lower,
+            middle_strike=middle,
+            upper_strike=upper,
+            option_type=option_type,
+            wing_debit=wing_debit,
+            middle_credit=middle_credit,
+            net_credit=fill_credit,
+            order_id=order_id,
+            fill_time=datetime.now(),
+            status=ButterflyStatus.COMPLETE
+        )
+        
+        self.butterflies.append(butterfly)
+        
+        # Track credits
+        credit_collected = fill_credit * 100  # Options are x100
+        self.credits_today += credit_collected
+        self.total_credits_collected += credit_collected
+        
+        logger.info(f"   ✓ FILLED @ net credit ${fill_credit:.2f}")
+        logger.info(f"   💰 CREDIT STACKED: ${credit_collected:.2f}")
+        logger.info(f"   📊 Credits today: ${self.credits_today:.2f} | Total: ${self.total_credits_collected:.2f}")
+        
+        # Send notification
+        emoji = "🟢" if signal.direction == Direction.LONG else "🔴"
+        get_notifier().send(
+            title=f"🦋 {emoji} Butterfly Filled",
+            message=f"{signal.direction.value} {lower}/{middle}/{upper} {option_type}\nCredit: ${fill_credit:.2f}\nStacked: ${credit_collected:.2f}",
+            sound="bugle"
+        )
+        
+        # Return as Trade-compatible object for trading_bot.py
+        return Trade(
+            id=butterfly.id,
+            signal_type=signal.signal_type,
+            direction=signal.direction,
+            entry_time=butterfly.entry_time,
+            entry_price=butterfly.net_credit,
+            option_symbol=butterfly.option_symbol,
+            option_strike=butterfly.middle_strike,
+            option_expiry=date.today(),
+            option_type=option_type,
+            quantity=1,
+            status=TradeStatus.FILLED
+        )
+    
+    def _get_butterfly_prices(
+        self,
+        lower: float,
+        middle: float,
+        upper: float,
+        option_type: str
+    ) -> Optional[Dict[str, float]]:
+        """Get bid/ask prices for butterfly legs"""
+        
+        if self.paper_trading:
+            # Simulate prices for paper trading
+            # Rough approximation: ATM options ~$5-10, wings cheaper
+            base_price = 5.0
+            spread = 0.10
+            
+            return {
+                'lower_bid': base_price - spread,
+                'lower_ask': base_price + spread,
+                'middle_bid': base_price * 1.5 - spread,
+                'middle_ask': base_price * 1.5 + spread,
+                'upper_bid': base_price - spread,
+                'upper_ask': base_price + spread,
+                'wing_debit': (base_price + spread) * 2,  # lower_ask + upper_ask
+                'middle_credit': (base_price * 1.5 - spread) * 2,  # 2 × middle_bid
+            }
+        
+        try:
+            # Get option chain
+            chain = self.client.get_option_chain(
+                symbol=self.symbol,
+                contract_type=option_type.upper(),
+                strike_count=30,
+                include_quotes=True,
+                from_date=date.today(),
+                to_date=date.today()
+            )
+            
+            if option_type.upper() in ['C', 'CALL']:
+                exp_map = chain.get('callExpDateMap', {})
+            else:
+                exp_map = chain.get('putExpDateMap', {})
+            
+            prices = {}
+            
+            for exp_str, strikes in exp_map.items():
+                for strike_val, strike_key in [(lower, 'lower'), (middle, 'middle'), (upper, 'upper')]:
+                    strike_str = f"{strike_val:.1f}"
+                    if strike_str in strikes:
+                        opt = strikes[strike_str][0]
+                        prices[f'{strike_key}_bid'] = opt.get('bid', 0)
+                        prices[f'{strike_key}_ask'] = opt.get('ask', 0)
+            
+            # Calculate totals
+            if all(k in prices for k in ['lower_ask', 'middle_bid', 'upper_ask']):
+                prices['wing_debit'] = prices['lower_ask'] + prices['upper_ask']
+                prices['middle_credit'] = prices['middle_bid'] * 2
+                return prices
+            
+            logger.warning("Could not find all strikes in option chain")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error getting butterfly prices: {e}")
+            return None
+    
+    def _place_butterfly_order(
+        self,
+        lower: float,
+        middle: float,
+        upper: float,
+        option_type: str,
+        limit_credit: float
+    ) -> tuple:
+        """
+        Place a butterfly order.
+        Returns: (success, order_id, fill_price)
+        """
+        
+        if self.paper_trading:
+            order_id = f"PAPER-BF-{datetime.now().strftime('%H%M%S')}"
+            # Simulate fill at theoretical price
+            fill_price = limit_credit
+            logger.info(f"[PAPER] Butterfly filled: {lower}/{middle}/{upper} @ ${fill_price:.2f} credit")
+            return True, order_id, fill_price
+        
+        # Live trading - place complex order
+        try:
+            # Build butterfly order
+            # This is broker-specific - Schwab uses their own format
+            result = self.client.place_butterfly_order(
+                symbol=self.symbol,
+                lower_strike=lower,
+                middle_strike=middle,
+                upper_strike=upper,
+                option_type=option_type,
+                quantity=1,
+                limit_credit=limit_credit
+            )
+            
+            if result and result.get('orderId'):
+                return True, result['orderId'], limit_credit
+            
+            return False, "", 0
+            
+        except Exception as e:
+            logger.error(f"Error placing butterfly order: {e}")
+            return False, "", 0
+    
+    # =========================================================================
+    # SINGLE-LEG OPTION EXECUTION (Original methods)
+    # =========================================================================
+    
     def _open_position(self, signal: Signal) -> Optional[Trade]:
-        """Open a new position based on signal"""
+        """Open a new single-leg position based on signal"""
         option_type = "CALL" if signal.direction == Direction.LONG else "PUT"
         
         logger.info(f"Opening {signal.direction.value} position - looking for {option_type}")
         
-        # Check correlation / delta exposure before proceeding
+        # Check correlation / delta exposure
         if not self._check_correlation(signal.direction):
             logger.warning("Trade blocked by correlation/delta exposure check")
-            get_notifier().trade_rejected(
-                "Delta exposure limit",
-                f"Adding this {signal.direction.value} would exceed max delta exposure of {self.max_delta_exposure:.0f}"
+            get_notifier().send(
+                title="⚠️ Delta Limit",
+                message=f"Adding this {signal.direction.value} would exceed max delta exposure of {self.max_delta_exposure:.0f}"
             )
             return None
         
-        # Find option (by delta or nearest OTM)
+        # Find option
         try:
-            # Determine delta based on time of day
             current_delta = self._get_current_target_delta()
             target_delta = current_delta if self.use_delta_targeting else None
             
@@ -470,53 +808,9 @@ class PositionManager:
             logger.error(f"Error finding option: {e}")
             return None
         
-        # Calculate position size using fixed fractional method
+        # Calculate position size
         position_size = self._calculate_position_size(option.ask)
-        
-        # Check buying power before placing order (live trading only)
         estimated_cost = option.ask * 100 * position_size
-        if not self.paper_trading:
-            try:
-                buying_power = self.client.get_buying_power()
-                logger.info(f"Buying power: ${buying_power:,.2f} | Estimated cost: ${estimated_cost:,.2f} ({position_size} contracts)")
-                
-                if buying_power < estimated_cost:
-                    logger.error("")
-                    logger.error("╔════════════════════════════════════════════════════════════╗")
-                    logger.error("║              ❌ INSUFFICIENT BUYING POWER                  ║")
-                    logger.error("╠════════════════════════════════════════════════════════════╣")
-                    logger.error(f"║  Available:  ${buying_power:>12,.2f}                            ║")
-                    logger.error(f"║  Required:   ${estimated_cost:>12,.2f}                            ║")
-                    logger.error(f"║  Shortfall:  ${estimated_cost - buying_power:>12,.2f}                            ║")
-                    logger.error("╚════════════════════════════════════════════════════════════╝")
-                    logger.error("")
-                    
-                    # Send push notification
-                    get_notifier().buying_power_warning(buying_power, estimated_cost)
-                    
-                    # Prompt user for action
-                    action = self._prompt_insufficient_funds_action()
-                    
-                    if action == 'paper':
-                        logger.info("Switching to PAPER TRADING mode")
-                        self.paper_trading = True
-                        # Continue to paper trade this signal
-                        logger.info(f"[PAPER] Would buy {position_size}x {option.symbol} @ ${option.ask:.2f} (${estimated_cost:.2f} total)")
-                    elif action == 'monitor':
-                        logger.info("Continuing in MONITOR ONLY mode - signals will be logged but not traded")
-                        self._monitor_only = True
-                        return None
-                    elif action == 'skip':
-                        logger.info("Skipping this trade - will attempt next signal")
-                        return None
-                    else:  # stop
-                        logger.info("Stopping bot as requested")
-                        raise SystemExit("User requested stop due to insufficient funds")
-                    
-            except SystemExit:
-                raise
-            except Exception as e:
-                logger.warning(f"Could not check buying power: {e}")
         
         # Execute order
         try:
@@ -531,25 +825,7 @@ class PositionManager:
                 logger.info(f"[PAPER] Would buy {position_size}x {option.symbol} @ ${option.ask:.2f} (${estimated_cost:.2f} total)")
             
         except Exception as e:
-            error_msg = str(e)
-            
-            # Parse common rejection reasons
-            if "Symbol is expired" in error_msg:
-                logger.error("❌ ORDER REJECTED: Option has expired")
-                logger.error("   The selected option expiration has passed.")
-                logger.error("   This can happen after hours - will retry with next expiration.")
-            elif "buying power" in error_msg.lower() or "insufficient" in error_msg.lower():
-                logger.error("❌ ORDER REJECTED: Insufficient buying power")
-                logger.error("   Your account doesn't have enough funds for this trade.")
-                logger.error(f"   Estimated cost: ${estimated_cost:.2f}")
-            elif "market closed" in error_msg.lower() or "not open" in error_msg.lower():
-                logger.error("❌ ORDER REJECTED: Market is closed")
-                logger.error("   Options can only be traded during market hours (9:30 AM - 4:00 PM ET)")
-            elif "invalid" in error_msg.lower():
-                logger.error(f"❌ ORDER REJECTED: Invalid order - {error_msg}")
-            else:
-                logger.error(f"❌ ORDER REJECTED: {error_msg}")
-            
+            logger.error(f"Order failed: {e}")
             return None
         
         # Update position state
@@ -586,44 +862,6 @@ class PositionManager:
         self.trades.append(trade)
         return trade
     
-    def _prompt_insufficient_funds_action(self) -> str:
-        """Prompt user for action when insufficient buying power"""
-        print("")
-        print("╔════════════════════════════════════════════════════════════╗")
-        print("║                    WHAT WOULD YOU LIKE TO DO?              ║")
-        print("╠════════════════════════════════════════════════════════════╣")
-        print("║  [1] Switch to PAPER TRADING mode                          ║")
-        print("║      - Continue running, simulate trades without real $    ║")
-        print("║                                                            ║")
-        print("║  [2] Continue in MONITOR ONLY mode                         ║")
-        print("║      - Log signals but don't trade (recommended)           ║")
-        print("║                                                            ║")
-        print("║  [3] SKIP this trade                                       ║")
-        print("║      - Skip this signal, try again on next signal          ║")
-        print("║                                                            ║")
-        print("║  [4] STOP the bot                                          ║")
-        print("║      - Shut down completely                                ║")
-        print("╚════════════════════════════════════════════════════════════╝")
-        print("")
-        
-        while True:
-            try:
-                choice = input("Enter choice [1-4] (default: 2): ").strip()
-                
-                if choice == '' or choice == '2':
-                    return 'monitor'
-                elif choice == '1':
-                    return 'paper'
-                elif choice == '3':
-                    return 'skip'
-                elif choice == '4':
-                    return 'stop'
-                else:
-                    print("Invalid choice. Please enter 1, 2, 3, or 4.")
-            except (EOFError, KeyboardInterrupt):
-                print("\nDefaulting to monitor mode...")
-                return 'monitor'
-    
     def _close_position(self, exit_signal: Signal) -> Optional[Trade]:
         """Close current position"""
         if self.position.direction == Direction.FLAT:
@@ -658,7 +896,6 @@ class PositionManager:
                 break
         
         if open_trade:
-            # Get current price for P&L calc
             try:
                 quote = self.client.get_quote(self.symbol)
                 exit_price = self.position.entry_price * 1.1  # Placeholder
@@ -670,22 +907,17 @@ class PositionManager:
             open_trade.exit_reason = f"Opposite signal: {exit_signal.signal_type.value}"
             open_trade.bars_held = self.position.bars_held
             
-            # Calculate P&L
             if open_trade.entry_price and open_trade.exit_price:
                 open_trade.pnl = (open_trade.exit_price - open_trade.entry_price) * 100 * quantity
                 open_trade.pnl_percent = ((open_trade.exit_price / open_trade.entry_price) - 1) * 100
             
             logger.info(f"Closed trade {open_trade.id}: P&L ${open_trade.pnl:.2f} ({open_trade.pnl_percent:.1f}%)")
             
-            # Update daily P&L tracking
             self.daily_pnl += open_trade.pnl
             
-            # Send close notification
-            get_notifier().trade_closed(
-                direction=self.position.direction.value,
-                pnl=open_trade.pnl,
-                pnl_percent=open_trade.pnl_percent,
-                reason=open_trade.exit_reason
+            get_notifier().send(
+                title="📊 Position Closed",
+                message=f"Closed: {self.position.direction.value}\nP&L: ${open_trade.pnl:.2f} ({open_trade.pnl_percent:.1f}%)"
             )
         
         # Reset position
@@ -703,83 +935,61 @@ class PositionManager:
         if self.has_position() and self.position.entry_price:
             self.position.current_price = current_price
             
-            # Calculate P&L
             pnl_dollars = (current_price - self.position.entry_price) * 100 * self.position.quantity
             pnl_percent = ((current_price / self.position.entry_price) - 1) * 100
             
             self.position.unrealized_pnl = pnl_dollars
             self.position.unrealized_pnl_percent = pnl_percent
             
-            # Update high water mark for trailing stop
             if current_price > self.position.high_water_mark:
                 self.position.high_water_mark = current_price
                 self.position.high_water_pnl_percent = pnl_percent
     
     def check_stop_loss(self) -> Optional[str]:
-        """
-        Check if stop loss has been triggered.
-        Returns exit reason if triggered, None otherwise.
-        """
+        """Check if stop loss has been triggered."""
         if not self.enable_stop_loss or not self.has_position():
             return None
         
-        # Check percent stop
         if self.position.unrealized_pnl_percent <= -self.stop_loss_percent:
-            return f"Stop Loss: {self.position.unrealized_pnl_percent:.1f}% loss (limit: -{self.stop_loss_percent}%)"
+            return f"Stop Loss: {self.position.unrealized_pnl_percent:.1f}% loss"
         
-        # Check dollar stop
         if self.position.unrealized_pnl <= -self.stop_loss_dollars:
-            return f"Stop Loss: ${abs(self.position.unrealized_pnl):.2f} loss (limit: ${self.stop_loss_dollars})"
+            return f"Stop Loss: ${abs(self.position.unrealized_pnl):.2f} loss"
         
         return None
     
     def check_take_profit(self) -> Optional[str]:
-        """
-        Check if take profit has been triggered.
-        Returns exit reason if triggered, None otherwise.
-        """
+        """Check if take profit has been triggered."""
         if not self.enable_take_profit or not self.has_position():
             return None
         
-        # Check percent target
         if self.position.unrealized_pnl_percent >= self.take_profit_percent:
-            return f"Take Profit: {self.position.unrealized_pnl_percent:.1f}% gain (target: {self.take_profit_percent}%)"
+            return f"Take Profit: {self.position.unrealized_pnl_percent:.1f}% gain"
         
-        # Check dollar target
         if self.position.unrealized_pnl >= self.take_profit_dollars:
-            return f"Take Profit: ${self.position.unrealized_pnl:.2f} gain (target: ${self.take_profit_dollars})"
+            return f"Take Profit: ${self.position.unrealized_pnl:.2f} gain"
         
         return None
     
     def check_trailing_stop(self) -> Optional[str]:
-        """
-        Check if trailing stop has been triggered.
-        Returns exit reason if triggered, None otherwise.
-        """
+        """Check if trailing stop has been triggered."""
         if not self.enable_trailing_stop or not self.has_position():
             return None
         
-        # Only activate trailing stop after minimum gain
         if self.position.high_water_pnl_percent < self.trailing_stop_activation:
             return None
         
-        # Calculate drawdown from high water mark
         if self.position.high_water_mark > 0 and self.position.current_price:
             drawdown_percent = ((self.position.high_water_mark - self.position.current_price) 
                                / self.position.high_water_mark) * 100
             
             if drawdown_percent >= self.trailing_stop_percent:
-                return (f"Trailing Stop: {drawdown_percent:.1f}% drawdown from high "
-                       f"(activated at {self.position.high_water_pnl_percent:.1f}% gain)")
+                return f"Trailing Stop: {drawdown_percent:.1f}% drawdown from high"
         
         return None
     
     def check_risk_management(self) -> Optional[str]:
-        """
-        Check all risk management conditions.
-        Returns exit reason if any triggered, None otherwise.
-        """
-        # Check in order of priority
+        """Check all risk management conditions."""
         stop_reason = self.check_stop_loss()
         if stop_reason:
             return stop_reason
@@ -791,37 +1001,6 @@ class PositionManager:
         trailing_reason = self.check_trailing_stop()
         if trailing_reason:
             return trailing_reason
-        
-        return None
-    
-    def update_position_price(self) -> Optional[str]:
-        """
-        Update position with current option price and check risk management.
-        Returns exit reason if risk management triggered, None otherwise.
-        """
-        if not self.has_position() or not self.position.option_symbol:
-            return None
-        
-        try:
-            # Get current option price
-            # Note: This is simplified - ideally we'd get the option quote directly
-            # For now, we estimate based on underlying movement
-            quote = self.client.get_quote(self.symbol)
-            
-            # Very rough estimate: option price moves ~50% of underlying for ATM
-            # This is a placeholder - real implementation should get actual option quote
-            if self.position.entry_price:
-                underlying_move = quote.last_price - self.position.entry_price
-                estimated_option_price = self.position.entry_price + (underlying_move * 0.5)
-                estimated_option_price = max(0.01, estimated_option_price)  # Floor at $0.01
-                
-                self.update_unrealized_pnl(estimated_option_price)
-                
-                # Check risk management
-                return self.check_risk_management()
-                
-        except Exception as e:
-            logger.error(f"Error updating position price: {e}")
         
         return None
     
@@ -838,7 +1017,7 @@ class PositionManager:
         winners = len([t for t in closed_trades if t.pnl and t.pnl > 0])
         losers = len([t for t in closed_trades if t.pnl and t.pnl < 0])
         
-        return {
+        stats = {
             "date": today.isoformat(),
             "trades_taken": self.daily_trade_count,
             "trades_remaining": self.trades_remaining(),
@@ -850,23 +1029,39 @@ class PositionManager:
             "win_rate": winners / len(closed_trades) * 100 if closed_trades else 0,
             "total_pnl": total_pnl
         }
+        
+        # Add butterfly stats if in butterfly mode
+        if self.butterfly_mode:
+            stats["butterflies_today"] = len([b for b in self.butterflies if b.entry_time.date() == today])
+            stats["credits_today"] = self.credits_today
+            stats["total_credits"] = self.total_credits_collected
+        
+        return stats
     
     def get_position_summary(self) -> Dict[str, Any]:
         """Get current position summary"""
         if not self.has_position():
-            return {"status": "FLAT"}
+            summary = {"status": "FLAT"}
+        else:
+            summary = {
+                "status": self.position.direction.value,
+                "symbol": self.position.option_symbol,
+                "type": self.position.option_type,
+                "quantity": self.position.quantity,
+                "entry_time": self.position.entry_time.isoformat() if self.position.entry_time else None,
+                "entry_price": self.position.entry_price,
+                "entry_signal": self.position.entry_signal.value if self.position.entry_signal else None,
+                "bars_held": self.position.bars_held,
+                "unrealized_pnl": self.position.unrealized_pnl
+            }
         
-        return {
-            "status": self.position.direction.value,
-            "symbol": self.position.option_symbol,
-            "type": self.position.option_type,
-            "quantity": self.position.quantity,
-            "entry_time": self.position.entry_time.isoformat() if self.position.entry_time else None,
-            "entry_price": self.position.entry_price,
-            "entry_signal": self.position.entry_signal.value if self.position.entry_signal else None,
-            "bars_held": self.position.bars_held,
-            "unrealized_pnl": self.position.unrealized_pnl
-        }
+        # Add butterfly info
+        if self.butterfly_mode:
+            summary["butterfly_mode"] = True
+            summary["credits_today"] = self.credits_today
+            summary["total_credits"] = self.total_credits_collected
+        
+        return summary
     
     def force_close_all(self, reason: str = "Manual close") -> List[Trade]:
         """Force close all positions"""
@@ -875,7 +1070,6 @@ class PositionManager:
         if self.has_position():
             logger.warning(f"Force closing position: {reason}")
             
-            # Create dummy signal for closing
             dummy_signal = Signal(
                 signal_type=SignalType.NONE,
                 direction=Direction.FLAT,

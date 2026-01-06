@@ -2,6 +2,7 @@
 # Trading Bot Manager - Multi-Symbol Support
 # Usage: ./bot.sh start SPY
 #        ./bot.sh start QQQ --paper
+#        ./bot.sh start /ES --execution-symbol SPX --butterfly
 #        ./bot.sh stop SPY
 #        ./bot.sh status
 
@@ -13,6 +14,7 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # Activate venv if exists
@@ -25,9 +27,9 @@ if [ -f ".env" ]; then
     export $(cat .env | grep -v '^#' | xargs)
 fi
 
-# Helper: Get safe symbol name (strip leading slash for futures)
+# Helper: Get safe symbol name (strip leading slash for futures, strip $ for indices)
 get_safe_symbol() {
-    echo "$1" | tr '[:upper:]' '[:lower:]' | sed 's/^\///'
+    echo "$1" | tr '[:upper:]' '[:lower:]' | sed 's/^\///' | sed 's/^\$//'
 }
 
 # Helper: Get PID file path
@@ -75,16 +77,24 @@ case "$1" in
     start)
         if [ -z "$2" ]; then
             echo -e "${RED}❌ Please specify a symbol${NC}"
-            echo "Usage: $0 start SYMBOL [--paper]"
+            echo "Usage: $0 start SYMBOL [OPTIONS]"
+            echo ""
+            echo "Options:"
+            echo "  --paper                    Paper trading (default)"
+            echo "  --live                     Live trading"
+            echo "  --execution-symbol SYM     Trade options on SYM instead of signal symbol"
+            echo "  --butterfly                Enable butterfly credit spread mode"
+            echo "  --cooldown N               Signal cooldown in bars"
+            echo ""
             echo "Examples:"
             echo "  $0 start SPY"
-            echo "  $0 start QQQ --paper"
-            echo "  $0 start \"/BTC\" --paper"
+            echo "  $0 start SPY --live"
+            echo "  $0 start /ES --execution-symbol SPX --butterfly"
             exit 1
         fi
         
         SYMBOL="$2"
-        EXTRA_ARGS="${@:3}"  # Capture --paper and other args
+        EXTRA_ARGS="${@:3}"  # Capture all extra args
         PID_FILE=$(get_pid_file "$SYMBOL")
         LOG_FILE=$(get_log_file "$SYMBOL")
         
@@ -94,6 +104,13 @@ case "$1" in
         fi
         
         echo -e "${BLUE}🚀 Starting $SYMBOL trading bot...${NC}"
+        if [[ "$EXTRA_ARGS" == *"--butterfly"* ]]; then
+            echo -e "${CYAN}🦋 Butterfly mode enabled${NC}"
+        fi
+        if [[ "$EXTRA_ARGS" == *"--execution-symbol"* ]]; then
+            echo -e "${CYAN}📊 Symbol mapping active${NC}"
+        fi
+        
         nohup python trading_bot.py --symbol "$SYMBOL" --no-confirm $EXTRA_ARGS >> "$LOG_FILE" 2>&1 &
         echo $! > "$PID_FILE"
         sleep 1
@@ -106,6 +123,16 @@ case "$1" in
             rm "$PID_FILE" 2>/dev/null
             exit 1
         fi
+        ;;
+    
+    # Convenience command for ES → SPX butterflies
+    butterfly)
+        SIGNAL_SYM="${2:-/ES}"
+        EXEC_SYM="${3:-SPX}"
+        EXTRA_ARGS="${@:4}"
+        
+        echo -e "${CYAN}🦋 Starting butterfly bot: $SIGNAL_SYM signals → $EXEC_SYM options${NC}"
+        $0 start "$SIGNAL_SYM" --execution-symbol "$EXEC_SYM" --butterfly $EXTRA_ARGS
         ;;
         
     stop)
@@ -161,7 +188,7 @@ case "$1" in
     restart)
         if [ -z "$2" ]; then
             echo -e "${RED}❌ Please specify a symbol${NC}"
-            echo "Usage: $0 restart SYMBOL [--paper]"
+            echo "Usage: $0 restart SYMBOL [OPTIONS]"
             exit 1
         fi
         SYMBOL="$2"
@@ -204,25 +231,38 @@ case "$1" in
         
     *)
         echo -e "${BLUE}Trading Bot Manager - Multi-Symbol${NC}"
-        echo "Usage: $0 {start|stop|stop-all|restart|status|logs|dashboard}"
+        echo "Usage: $0 {start|stop|stop-all|restart|status|logs|butterfly}"
         echo ""
         echo -e "${GREEN}Commands:${NC}"
-        echo "  start SYMBOL [--paper]  - Start bot for SYMBOL"
+        echo "  start SYMBOL [OPTIONS]  - Start bot for SYMBOL"
         echo "  stop SYMBOL             - Stop bot for SYMBOL"
         echo "  stop-all                - Stop all running bots"
         echo "  restart SYMBOL          - Restart bot for SYMBOL"
         echo "  status                  - Show all running bots"
         echo "  logs SYMBOL             - Follow log file for SYMBOL"
-        echo "  dashboard               - Start the web dashboard"
+        echo "  butterfly [SIG] [EXEC]  - Start butterfly bot (default: /ES → SPX)"
         echo ""
-        echo -e "${GREEN}Examples:${NC}"
-        echo "  $0 start SPY                 # Start SPY live"
-        echo "  $0 start QQQ --paper         # Start QQQ paper trading"
-        echo "  $0 start \"/BTC\" --paper      # Start BTC futures paper"
-        echo "  $0 stop SPY                  # Stop SPY bot"
-        echo "  $0 stop-all                  # Stop all bots"
-        echo "  $0 status                    # Show running bots"
-        echo "  $0 logs SPY                  # Follow SPY logs"
+        echo -e "${GREEN}Options:${NC}"
+        echo "  --paper                    Paper trading (default)"
+        echo "  --live                     Live trading"  
+        echo "  --execution-symbol SYM     Trade options on SYM instead of signal symbol"
+        echo "  --butterfly                Enable butterfly credit spread mode"
+        echo "  --cooldown N               Signal cooldown in bars"
+        echo ""
+        echo -e "${GREEN}Standard Examples:${NC}"
+        echo "  $0 start SPY                    # SPY paper trading"
+        echo "  $0 start SPY --live             # SPY live trading"
+        echo "  $0 start QQQ                    # QQQ paper trading"
+        echo "  $0 stop SPY                     # Stop SPY bot"
+        echo "  $0 status                       # Show running bots"
+        echo ""
+        echo -e "${CYAN}🦋 Butterfly Examples (ES signals → SPX options):${NC}"
+        echo "  $0 butterfly                    # /ES → SPX butterflies (paper)"
+        echo "  $0 butterfly /ES SPX --live     # /ES → SPX butterflies (live)"
+        echo "  $0 butterfly /ES \$SPX.X        # Explicit SPX index symbol"
+        echo "  $0 start /ES -e SPX --butterfly # Same as above, manual flags"
+        echo ""
+        echo -e "${YELLOW}Note: Paper trading is the DEFAULT. Use --live for real trades.${NC}"
         exit 1
         ;;
 esac

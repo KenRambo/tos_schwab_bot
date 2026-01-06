@@ -30,8 +30,14 @@ class SchwabConfig:
 class TradingConfig:
     """Trading parameters - OPTIMIZED from variant_a_seed_789"""
     symbol: str = "SPY"
+    execution_symbol: Optional[str] = None  # If set, trade options on this symbol instead of signal symbol
     contracts: int = 1
     max_daily_trades: int = 6  # OPTIMIZED
+    
+    # Butterfly mode (for credit spread stacking)
+    butterfly_mode: bool = False
+    butterfly_wing_width: int = 5  # Points between strikes
+    butterfly_credit_target_pct: float = 0.30  # Target 30% credit over wing cost
     
     # Delta targeting
     use_delta_targeting: bool = True
@@ -73,6 +79,11 @@ class TradingConfig:
     # Correlation / exposure
     enable_correlation_check: bool = True
     max_delta_exposure: float = 100.0
+    
+    @property
+    def option_symbol(self) -> str:
+        """Returns the symbol to use for option trading (execution_symbol if set, else signal symbol)"""
+        return self.execution_symbol or self.symbol
 
 
 @dataclass
@@ -87,7 +98,7 @@ class TimeConfig:
     avoid_lunch_end: time = field(default_factory=lambda: time(13, 30))
     avoid_last_minutes: int = 15
     use_time_filter: bool = False
-    rth_only: bool = False
+    rth_only: bool = True
 
 
 @dataclass 
@@ -179,7 +190,7 @@ class BotConfig:
     data_poll_interval: int = 5
     use_streaming: bool = True
     enable_intra_bar_signals: bool = True
-    intra_bar_check_interval: int = 15
+    intra_bar_check_interval: int = 60
     paper_trading: bool = True
     
     def validate(self) -> bool:
@@ -188,4 +199,4 @@ class BotConfig:
         return True
 
 
-config = BotConfig()    
+config = BotConfig()

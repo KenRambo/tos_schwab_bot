@@ -1,6 +1,11 @@
 # ToS Signal Trading Bot
 
-A Python trading bot that replicates the signal logic from your ThinkOrSwim Auction Market Theory (AMT) indicator and automatically trades SPY options via the Schwab API.
+A Python trading bot that replicates the signal logic from your ThinkOrSwim Auction Market Theory (AMT) indicator and automatically trades options via the Schwab API.
+
+**Supports:**
+- SPY/QQQ single-leg options (calls/puts)
+- **ES futures signals → SPX butterfly credit spreads** (new!)
+- Multi-symbol daemon mode
 
 ## 🎯 Latest Optimization Results (January 2026)
 
@@ -16,19 +21,38 @@ A Python trading bot that replicates the signal logic from your ThinkOrSwim Auct
 
 **Key Finding:** Enabling short signals (VAH rejection + breakdown) increased P&L by 2.5x compared to long-only strategy.
 
-## 🔧 Recent Bug Fixes (January 5, 2026)
+## 🦋 Butterfly Credit Spread Mode (New!)
 
-Fixed critical bugs causing false signals and Value Area mismatch vs ToS:
+Trade SPX/XSP butterfly credit spreads based on ES futures signals:
 
-| Bug | Symptom | Root Cause | Fix |
-|-----|---------|------------|-----|
-| **VA off by ~$6** | Bot VAH: $654.70, ToS VAH: $660.35 | StdDev calculated on all 40 bars instead of last 20 | Use `list(self.bars)[-self.length_period:]` |
-| **Wild VA early session** | VAH: $707 at 12:30 (impossible) | Previous day's bars still in deque | Add `self.bars.clear()` in `reset_session()` |
-| **SUSTAINED_BREAKOUT firing when disabled** | Signal fired despite `enable_sustained_breakout=False` in config | Signal enable flags not passed from config to SignalDetector | Pass all `enable_*` flags in SignalDetector initialization |
+```bash
+# Quick start - ES signals → SPX butterflies (paper mode)
+./bot.sh butterfly
 
-**Files Changed:**
-- `signal_detector.py` - Fixed `_calculate_value_area()` and `reset_session()`
-- `trading_bot.py` - Added all signal enable flags to SignalDetector init
+# Live trading
+./bot.sh butterfly /ES SPX --live
+
+# Manual flags
+python trading_bot.py --symbol /ES --execution-symbol SPX --butterfly
+```
+
+**How it works:**
+- Watches /ES futures for AMT signals (VAL bounce, VAH rejection, etc.)
+- On LONG signal → Opens call butterfly on SPX
+- On SHORT signal → Opens put butterfly on SPX
+- Collects credit on each butterfly for "credit stacking" strategy
+
+## 🔧 Recent Bug Fixes (January 6, 2026)
+
+| Bug | Symptom | Fix |
+|-----|---------|-----|
+| **VA off by ~$6** | Bot VAH didn't match ToS | StdDev now uses last 20 bars only |
+| **Cross-session pollution** | Wild VA early session | `reset_session()` clears bars deque |
+| **Signals firing when disabled** | SUSTAINED_BREAKOUT despite config | Signal enable flags passed to detector |
+| **OR bias buffer zone** | Wrong bias in buffer zone | Added explicit `else` clause for NEUTRAL |
+| **Globex suppressing RTH** | Morning signals blocked | RTH cooldown reset at 9:30 AM |
+| **VIX=0 during globex** | Wrong cooldown (15 vs 17) | Treat VIX≤0 as unavailable |
+| **Price $0.00 on signals** | Invalid quote price | Validate price before live bar update |
 
 ## Overview
 
@@ -40,6 +64,19 @@ This bot monitors SPY price action, detects the same signals your ToS indicator 
 The bot implements your "hold until opposite signal" strategy - positions are held until an opposite direction signal fires.
 
 ## Features
+
+### Trading Modes
+
+**Single-Leg Options (Default):**
+- LONG Signal → Buy CALL at target delta (default 0.67Δ)
+- SHORT Signal → Buy PUT at target delta
+- Hold until opposite signal fires
+
+**Butterfly Credit Spreads (`--butterfly`):**
+- LONG Signal → Call butterfly (buy lower/upper, sell 2× middle)
+- SHORT Signal → Put butterfly (buy lower/upper, sell 2× middle)
+- Collect net credit on each trade ("credit stacking")
+- Supports SPX ($5 strikes) and XSP ($1 strikes)
 
 ### Signal Detection (Matching Your ToS Indicator)
 
@@ -59,9 +96,22 @@ The bot implements your "hold until opposite signal" strategy - positions are he
 
 - **Opening Range Bias Filter** - Only takes signals aligned with first 30-minute direction
 - **RTH Only** - Signals only during regular trading hours (9:30 AM - 4:00 PM ET)
+- **RTH Cooldown Reset** - Globex signals don't suppress morning signals
 - **Signal Cooldown** - 17 bars (~85 min on 5-min chart) between signals
 - **Daily Trade Limit** - Maximum 6 trades per day
-- **VIX Regime** - Adjusts cooldown based on volatility (optional)
+- **VIX Regime** - Adjusts cooldown based on volatility (handles VIX=0 gracefully)
+
+### Symbol Mapping
+
+Trade options on a different symbol than your signal source:
+
+```bash
+# Watch /ES futures, trade SPX options
+python trading_bot.py --symbol /ES --execution-symbol SPX
+
+# Watch /NQ futures, trade QQQ options  
+python trading_bot.py --symbol /NQ --execution-symbol QQQ
+```
 
 ### Option Selection
 
@@ -91,6 +141,8 @@ Get mobile alerts for:
 - 📈📉 Signal detected
 - 🟢🔴 Trade executed
 - 💰💸 Position closed (with P&L)
+- 🦋 Butterfly filled (with credit collected)
+- 🦋 Butterfly rejected
 - 💳 Insufficient buying power
 - 🔻 Drawdown alert
 - 📊 Daily/weekly summaries
@@ -147,26 +199,74 @@ PUSHOVER_API_TOKEN=your_api_token
 
 ## Usage
 
+### Quick Start
+
+```bash
+# SPY paper trading (default)
+python trading_bot.py
+
+# SPY live trading
+python trading_bot.py --live
+
+# ES signals → SPX butterflies
+python trading_bot.py --symbol /ES --execution-symbol SPX --butterfly
+```
+
+### CLI Options
+
+```bash
+python trading_bot.py [OPTIONS]
+
+Options:
+  --symbol, -s SYMBOL          Signal symbol to watch (default: SPY)
+  --execution-symbol, -e SYM   Trade options on this symbol instead
+  --butterfly                  Enable butterfly credit spread mode
+  --paper, -p                  Paper trading (default)
+  --live                       Live trading (requires confirmation)
+  --contracts, -c N            Contracts per trade
+  --max-trades, -m N           Max trades per day
+  --cooldown N                 Signal cooldown in bars
+  --no-confirm, -y             Skip confirmation (for daemons)
+  --log-file PATH              Custom log file
+```
+
+### Daemon Mode (Background)
+
+```bash
+# Standard trading
+./bot.sh start SPY                    # SPY paper trading
+./bot.sh start SPY --live             # SPY live trading
+./bot.sh start QQQ                    # QQQ paper trading
+
+# Butterfly mode (ES → SPX)
+./bot.sh butterfly                    # Paper mode (default)
+./bot.sh butterfly /ES SPX --live     # Live mode
+
+# Control
+./bot.sh stop SPY                     # Stop one bot
+./bot.sh stop-all                     # Stop all bots
+./bot.sh restart SPY                  # Restart
+./bot.sh status                       # Show running bots
+./bot.sh logs SPY                     # Follow logs
+```
+
+### Symbol Mapping Examples
+
+```bash
+# ES futures signals → SPX options
+python trading_bot.py -s /ES -e SPX
+
+# ES futures signals → SPX butterflies  
+python trading_bot.py -s /ES -e SPX --butterfly
+
+# NQ futures signals → QQQ options
+python trading_bot.py -s /NQ -e QQQ
+```
+
 ### Interactive Mode
 
 ```bash
 python trading_bot.py
-```
-
-### Background Mode (survives terminal close)
-
-```bash
-# Start bot in background
-./bot.sh start
-
-# Check status
-./bot.sh status
-
-# View live logs
-./bot.sh logs
-
-# Stop bot
-./bot.sh stop
 ```
 
 On first run, the bot will:
@@ -189,7 +289,13 @@ python apply_config_simple.py --from recommended_config_variant_a.json
 @dataclass
 class TradingConfig:
     symbol: str = "SPY"
+    execution_symbol: str = None           # NEW: Trade options on different symbol
     max_daily_trades: int = 6              # OPTIMIZED (was 3)
+    
+    # Butterfly Mode (for SPX/XSP credit stacking)
+    butterfly_mode: bool = False           # NEW: Enable with --butterfly
+    butterfly_wing_width: int = 5          # Points between strikes
+    butterfly_credit_target_pct: float = 0.30  # Target 30% credit
     
     # Option Selection - HIGH DELTA ATM
     use_delta_targeting: bool = True
@@ -246,24 +352,39 @@ class SignalConfig:
 
 ### Paper Trading vs Live Trading
 
-The bot starts in **paper trading mode** by default. To switch to live:
+**Paper trading is the DEFAULT.** The bot won't place real orders unless you explicitly enable live mode.
 
-1. Edit `config.py`: Set `paper_trading = False`
-2. Restart the bot
-3. Type `CONFIRM` when prompted (or use `--no-confirm` flag)
+To trade live:
+
+```bash
+# CLI flag
+python trading_bot.py --live
+
+# Or edit config.py
+paper_trading = False
+
+# Daemon mode
+./bot.sh start SPY --live
+./bot.sh butterfly /ES SPX --live
+```
+
+When switching to live, you must type `CONFIRM` when prompted (or use `--no-confirm` for daemons).
 
 ## File Structure
 
 ```
 tos_schwab_bot/
-├── trading_bot.py       # Main bot application
+├── trading_bot.py       # Main bot application (supports --butterfly, --execution-symbol)
 ├── config.py            # Configuration settings (auto-generated)
 ├── signal_detector.py   # Signal detection logic
-├── position_manager.py  # Position/trade management
+├── position_manager.py  # Position/trade management (supports butterflies)
 ├── schwab_auth.py       # OAuth2 authentication
 ├── schwab_client.py     # Schwab API client
 ├── notifications.py     # Pushover push notifications
 ├── analytics.py         # Performance tracking & reporting
+│
+├── # Daemon Management
+├── bot.sh               # Multi-symbol daemon manager
 │
 ├── # Optimization Tools
 ├── optimizer_simple.py      # Simplified optimizer (high delta focus)
@@ -280,11 +401,10 @@ tos_schwab_bot/
 ├── recommended_config_consensus.json  # Conservative consensus config
 │
 ├── # ThinkScript Studies
-├── AMT_V35_Optimized.ts     # Latest optimized study (use this)
-├── AMT_Complete_V2.ts       # Full AMT study (legacy)
+├── AMT_V36_OPTIMIZED.ts     # Latest optimized study (RTH cooldown reset)
+├── AMT_V35_Optimized.ts     # Previous version
 │
 ├── # Utilities
-├── bot.sh               # Background process management
 ├── requirements.txt     # Python dependencies
 ├── .env.template        # Environment template
 └── README.md            # This file
@@ -684,6 +804,8 @@ The Python signal detection mirrors your ToS script logic:
 
 ## Sample Log Output
 
+### Single-Leg Mode (Default)
+
 ```
 2025-01-02 10:30:05 ET - INFO - ─── Bar #42 | 10:30:05 ET ───
 2025-01-02 10:30:05 ET - INFO -   Price: $591.25 (O:590.80 H:591.50 L:590.75)
@@ -697,6 +819,31 @@ The Python signal detection mirrors your ToS script logic:
 2025-01-02 10:30:05 ET - INFO - Looking for CALL option, SPY @ $591.25, target delta: 67%
 2025-01-02 10:30:05 ET - INFO - Selected: SPY250102C00593000 | Strike: 593.0 | Delta: 0.67
 2025-01-02 10:30:05 ET - INFO - Trade executed: T00001
+```
+
+### Butterfly Mode (--butterfly)
+
+```
+2026-01-06 10:35:02 ET - INFO - ============================================================
+2026-01-06 10:35:02 ET - INFO - 🦋 BUTTERFLY SIGNAL: SHORT PUT
+2026-01-06 10:35:02 ET - INFO -    Signal: VAH_REJECTION
+2026-01-06 10:35:02 ET - INFO -    Price: $6045.25
+2026-01-06 10:35:02 ET - INFO - ============================================================
+2026-01-06 10:35:02 ET - INFO -    Underlying: $6045.25
+2026-01-06 10:35:02 ET - INFO -    Strikes: 6030/6035/6040
+2026-01-06 10:35:02 ET - INFO -    ┌─ BUTTERFLY STRUCTURE ─────────────────────
+2026-01-06 10:35:02 ET - INFO -    │ Lower wing (6030): $4.90 debit
+2026-01-06 10:35:02 ET - INFO -    │ Middle x2  (6035): $7.40 × 2 = $14.80 credit
+2026-01-06 10:35:02 ET - INFO -    │ Upper wing (6040): $5.10 debit
+2026-01-06 10:35:02 ET - INFO -    ├───────────────────────────────────────────
+2026-01-06 10:35:02 ET - INFO -    │ Wing debit:     $10.00
+2026-01-06 10:35:02 ET - INFO -    │ Middle credit:  $14.80
+2026-01-06 10:35:02 ET - INFO -    │ Theoretical net: $4.80
+2026-01-06 10:35:02 ET - INFO -    │ Target credit:  $13.00 (30% above wings)
+2026-01-06 10:35:02 ET - INFO -    └───────────────────────────────────────────
+2026-01-06 10:35:02 ET - INFO -    ✓ FILLED @ net credit $4.80
+2026-01-06 10:35:02 ET - INFO -    💰 CREDIT STACKED: $480.00
+2026-01-06 10:35:02 ET - INFO -    📊 Credits today: $480.00 | Total: $2,340.00
 ```
 
 ## Safety Features
@@ -752,6 +899,16 @@ The Python signal detection mirrors your ToS script logic:
 - Test with: `python -c "from notifications import get_notifier; get_notifier().send('Test', 'Test')"`
 
 ## Changelog
+
+### v1.2 (January 6, 2026)
+- **NEW:** Butterfly credit spread mode (`--butterfly` flag)
+- **NEW:** Symbol mapping (`--execution-symbol`) for ES→SPX trading
+- **NEW:** `./bot.sh butterfly` convenience command
+- **FIXED:** OR bias buffer zone now defaults to NEUTRAL (was keeping stale value)
+- **FIXED:** RTH cooldown reset at 9:30 AM (globex signals no longer suppress morning)
+- **FIXED:** VIX=0 during extended hours uses default cooldown (was triggering low-vol multiplier)
+- **FIXED:** Price $0.00 on intra-bar signals (now validates quote price)
+- **UPDATED:** bot.sh with butterfly examples and improved help text
 
 ### v1.1 (January 5, 2026)
 - **FIXED:** Value Area calculation now matches ToS exactly (StdDev uses last N bars only)

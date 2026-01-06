@@ -196,9 +196,11 @@ class TradingBot:
             )
             
             # Initialize position manager
+            # Use option_symbol for execution (either execution_symbol if set, or signal symbol)
+            option_symbol = self.config.trading.option_symbol
             self.position_manager = PositionManager(
                 client=self.client,
-                symbol=self.config.trading.symbol,
+                symbol=option_symbol,  # This is the symbol for option trading
                 contracts=self.config.trading.contracts,
                 max_daily_trades=self.config.trading.max_daily_trades,
                 min_dte=self.config.trading.min_days_to_expiry,
@@ -230,8 +232,16 @@ class TradingBot:
                 max_daily_loss_percent=self.config.trading.max_daily_loss_percent,
                 # Correlation / delta exposure
                 enable_correlation_check=self.config.trading.enable_correlation_check,
-                max_delta_exposure=self.config.trading.max_delta_exposure
+                max_delta_exposure=self.config.trading.max_delta_exposure,
+                # Butterfly mode
+                butterfly_mode=self.config.trading.butterfly_mode,
+                butterfly_wing_width=self.config.trading.butterfly_wing_width,
+                butterfly_credit_target_pct=self.config.trading.butterfly_credit_target_pct
             )
+            
+            # Log if using symbol mapping
+            if self.config.trading.execution_symbol:
+                logger.info(f"Symbol mapping: {self.config.trading.symbol} signals → {option_symbol} options")
             
             # Sync with broker if live trading
             if not self.config.paper_trading:
@@ -694,6 +704,11 @@ class TradingBot:
             price = quote.last_price
             now = get_et_now()
             
+            # Validate price - reject 0 or None
+            if not price or price <= 0:
+                logger.debug(f"Invalid quote price: {price} - skipping live bar update")
+                return None
+            
             if self._live_bar_open is None:
                 # First tick of this bar
                 self._live_bar_open = price
@@ -973,6 +988,10 @@ Examples:
   %(prog)s --symbol SPY -c 2 -m 5       2 contracts, max 5 trades/day
   %(prog)s --help                       Show all options
   
+ES futures → SPX options (butterfly credit spreads):
+  %(prog)s --symbol /ES --execution-symbol SPX
+  %(prog)s --symbol /ES --execution-symbol $SPX.X --butterfly
+  
 Running multiple symbols as daemons:
   %(prog)s --symbol SPY --no-confirm &
   %(prog)s --symbol QQQ --no-confirm &
@@ -984,7 +1003,20 @@ Running multiple symbols as daemons:
         '--symbol', '-s',
         type=str,
         default=None,
-        help='Trading symbol (default: from config, usually SPY)'
+        help='Signal symbol to watch (default: from config, usually SPY)'
+    )
+    
+    parser.add_argument(
+        '--execution-symbol', '-e',
+        type=str,
+        default=None,
+        help='Symbol to trade options on (default: same as signal symbol). Use for ES→SPX mapping.'
+    )
+    
+    parser.add_argument(
+        '--butterfly',
+        action='store_true',
+        help='Enable butterfly credit spread mode (for SPX/XSP credit stacking)'
     )
     
     parser.add_argument(
@@ -1064,7 +1096,17 @@ Running multiple symbols as daemons:
     
     if args.symbol:
         bot_config.trading.symbol = args.symbol.upper()
-        print(f"  ✓ Symbol: {bot_config.trading.symbol}")
+        print(f"  ✓ Signal symbol: {bot_config.trading.symbol}")
+        overrides_applied = True
+    
+    if args.execution_symbol:
+        bot_config.trading.execution_symbol = args.execution_symbol.upper()
+        print(f"  ✓ Execution symbol: {bot_config.trading.execution_symbol}")
+        overrides_applied = True
+    
+    if args.butterfly:
+        bot_config.trading.butterfly_mode = True
+        print(f"  ✓ Butterfly mode: ENABLED")
         overrides_applied = True
     
     if args.paper:
@@ -1113,10 +1155,14 @@ Running multiple symbols as daemons:
     
     # Display configuration
     print(f"\n📊 Final Configuration:")
-    print(f"  Symbol: {bot_config.trading.symbol}")
+    print(f"  Signal symbol: {bot_config.trading.symbol}")
+    if bot_config.trading.execution_symbol:
+        print(f"  Execution symbol: {bot_config.trading.execution_symbol} (options traded here)")
     print(f"  Contracts: {bot_config.trading.contracts}")
     print(f"  Max daily trades: {bot_config.trading.max_daily_trades}")
     print(f"  Paper trading: {bot_config.paper_trading}")
+    if bot_config.trading.butterfly_mode:
+        print(f"  Butterfly mode: ENABLED (credit spread stacking)")
     print(f"  RTH only: {bot_config.time.rth_only}")
     print(f"  OR bias filter: {bot_config.signal.use_or_bias_filter}")
     print(f"  Signal cooldown: {bot_config.signal.signal_cooldown_bars} bars")
