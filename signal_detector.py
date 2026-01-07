@@ -802,5 +802,7 @@ class SignalDetector:
             "val": va.val if va else 0,
             "poc": va.poc if va else 0,
             "bars_above_vah": self.bars_above_vah,
-            "bars_below_val": self.bars_below_val
+            "bars_below_val": self.bars_below_val,
+            "detector_bar_count": len(self.bars),  # Actual bars in detector
+            "session_volume": self.session_volume
         }

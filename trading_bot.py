@@ -322,7 +322,7 @@ class TradingBot:
     def _load_historical_bars(self):
         """Load historical bars to initialize the signal detector - FULL DAY from 9:30 AM"""
         try:
-            from datetime import datetime, timedelta
+            from datetime import datetime, timedelta, time as dt_time
             import pytz
             
             et = pytz.timezone('US/Eastern')
@@ -357,16 +357,28 @@ class TradingBot:
             
             logger.info(f"Loaded {len(bars)} historical bars")
             
-            # Filter to only TODAY's bars for proper state initialization
+            # Filter to only TODAY's RTH bars (9:30-16:00) for proper state initialization
             today = date.today()
-            todays_bars = [b for b in bars if b['datetime'].date() == today]
+            rth_start = dt_time(9, 30)
+            rth_end = dt_time(16, 0)
             
-            if todays_bars:
-                logger.info(f"Found {len(todays_bars)} bars from today (filtering out prior days)")
-                bars_to_process = todays_bars
+            todays_rth_bars = [
+                b for b in bars 
+                if b['datetime'].date() == today 
+                and rth_start <= b['datetime'].time() < rth_end
+            ]
+            
+            if todays_rth_bars:
+                logger.info(f"Found {len(todays_rth_bars)} RTH bars from today (filtering out prior days and globex)")
+                bars_to_process = todays_rth_bars
             else:
-                logger.warning("No bars from today found - using all historical bars")
+                logger.warning("No RTH bars from today found - using all historical bars")
                 bars_to_process = bars
+            
+            # IMPORTANT: Reset detector session BEFORE loading bars
+            # This ensures we start with a clean slate for today
+            logger.info("Resetting detector session for fresh start...")
+            self.detector.reset_session()
             
             # Check if we have OR period bars (9:30 - 10:00 AM)
             or_bars = [b for b in bars_to_process if b['datetime'].date() == today 
@@ -784,12 +796,13 @@ class TradingBot:
         
         # Only show levels if we have enough data
         vah, poc, val = state['vah'], state['poc'], state['val']
+        detector_bars = state.get('detector_bar_count', 0)
         if vah > 0 and poc > 0 and val > 0:
             logger.info(f"  VAH: ${vah:.2f} | POC: ${poc:.2f} | VAL: ${val:.2f}")
             logger.info(f"  Position vs Levels: {state['position']}")
             logger.info(f"  Bars Above VAH: {state['bars_above_vah']} | Bars Below VAL: {state['bars_below_val']}")
         else:
-            logger.info(f"  Value Area: Building... (need {self.config.signal.length_period} bars, have {self.bars_processed})")
+            logger.info(f"  Value Area: Building... (need {self.config.signal.length_period} bars, detector has {detector_bars})")
         
         # OR status
         or_high, or_low = state['or_high'], state['or_low']
