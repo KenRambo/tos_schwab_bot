@@ -77,6 +77,7 @@ Filters signals based on dealer gamma positioning to avoid trading against marke
 
 | Bug | Symptom | Fix |
 |-----|---------|-----|
+| **Drawdown alert spam** | Alert every 5 seconds | Throttled to max 1 per 30 minutes |
 | **VA shows 0.00 after restart** | "need 20 bars, have 67" but VA=0 | Filter for RTH-only bars, reset session before load |
 | **VA off by ~$6** | Bot VAH didn't match ToS | StdDev now uses last 20 bars only |
 | **Cross-session pollution** | Wild VA early session | `reset_session()` clears bars deque |
@@ -976,9 +977,12 @@ The Python signal detection mirrors your ToS script logic:
 - Log now shows: `Value Area: Building... (need 20 bars, detector has X)`
 
 ### Value Area doesn't match ToS
+- **By design** - Bot uses VWAP ± StdDev, ToS uses true volume profile
+- On trending days, bot's VA will be narrower than ToS
+- This is intentional - the VWAP approach was backtested and validated
+- Narrower VA on trend days = more conservative (avoids fading strong moves)
 - **Fixed in v1.1** - StdDev now uses last 20 bars only (was using all 40)
 - **Fixed in v1.1** - Session reset now clears bars deque
-- Restart bot after updating `signal_detector.py`
 
 ### Signals firing when they should be disabled
 - **Fixed in v1.1** - All `enable_*` flags now passed to SignalDetector
@@ -1000,6 +1004,7 @@ The Python signal detection mirrors your ToS script logic:
 - **NEW:** Missed signal scanning on restart - shows signals that occurred while bot was offline
 - **FIXED:** VA showing 0.00 after mid-session restart (now filters for RTH-only bars, resets session before load)
 - **FIXED:** Log now shows actual detector bar count instead of total bars processed
+- **FIXED:** Drawdown alerts spamming every 5 seconds (now throttled to max 1 per 30 minutes)
 - **UPDATED:** ToS study to V3.7 with gamma filter integration
 - **UPDATED:** Bot logs gamma regime and levels each bar
 

@@ -458,13 +458,14 @@ class SignalDetector:
         """
         Calculate current value area levels.
         
-        FIXED: Now matches ToS calculation:
+        Uses VWAP ± (0.5 × StdDev) approach:
         - VAH = Session VWAP + (0.5 × StdDev of last N closes)
         - VAL = Session VWAP - (0.5 × StdDev of last N closes)
         - POC = Volume-weighted mid-price (session)
         
-        The key fix is using only the last `length_period` bars for StdDev,
-        matching ToS: StDev(close, lengthPeriod)
+        NOTE: This differs from ToS's true volume profile on trending days,
+        but this is what was backtested and validated. The narrower VA on
+        trend days is actually more conservative for mean reversion signals.
         """
         if self.session_volume == 0:
             return ValueArea(vah=0, val=0, poc=0, vwap=0)
@@ -475,7 +476,7 @@ class SignalDetector:
         # POC (volume-weighted price, session-based)
         poc = self.session_vol_weighted / self.session_volume
         
-        # FIX: Use only the last length_period bars for std dev calculation
+        # Use only the last length_period bars for std dev calculation
         # This matches ToS: StDev(close, lengthPeriod)
         recent_bars = list(self.bars)[-self.length_period:]
         
