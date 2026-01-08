@@ -73,10 +73,11 @@ Filters signals based on dealer gamma positioning to avoid trading against marke
   Price vs ZG: $6968.75 (+13.75)
 ```
 
-## 🔧 Recent Bug Fixes (January 7, 2026)
+## 🔧 Recent Bug Fixes (January 8, 2026)
 
 | Bug | Symptom | Fix |
 |-----|---------|-----|
+| **No VA at market open** | "need 20 bars" until 11:10 AM | Load overnight bars for VA, fixed session reset logic |
 | **Drawdown alert spam** | Alert every 5 seconds | Throttled to max 1 per 30 minutes |
 | **VA shows 0.00 after restart** | "need 20 bars, have 67" but VA=0 | Filter for RTH-only bars, reset session before load |
 | **VA off by ~$6** | Bot VAH didn't match ToS | StdDev now uses last 20 bars only |
@@ -971,10 +972,10 @@ The Python signal detection mirrors your ToS script logic:
 - Enable debug logging: Change `level=logging.INFO` to `level=logging.DEBUG`
 
 ### Value Area shows 0.00 or "Building..."
-- **Normal early session** - Bot needs 20 RTH bars (~100 min from 9:30) to calculate VA
-- **Fixed in v1.3** - Now filters for RTH-only bars and shows actual detector bar count
-- If restarting mid-session, VA builds from scratch (ToS has continuous history)
-- Log now shows: `Value Area: Building... (need 20 bars, detector has X)`
+- **Fixed in v1.4** - Now loads overnight/globex bars so VA is ready at market open
+- Bot loads ~200 bars including overnight session (6pm previous day to now)
+- Session reset logic updated to not wipe overnight data at RTH transition
+- If you still see "Building...", check that `extended_hours=True` in the API call
 
 ### Value Area doesn't match ToS
 - **By design** - Bot uses VWAP ± StdDev, ToS uses true volume profile
@@ -994,6 +995,11 @@ The Python signal detection mirrors your ToS script logic:
 - Test with: `python -c "from notifications import get_notifier; get_notifier().send('Test', 'Test')"`
 
 ## Changelog
+
+### v1.4 (January 8, 2026)
+- **FIXED:** VA now ready at market open - overnight/globex bars included for VA calculation
+- **FIXED:** Session reset no longer wipes overnight data when transitioning to RTH
+- **IMPROVED:** Extended hours data loaded (200 bars covering overnight session)
 
 ### v1.3 (January 7, 2026)
 - **NEW:** Gamma exposure filter (`use_gamma_filter`) - filters signals based on dealer gamma positioning

@@ -320,7 +320,7 @@ class TradingBot:
             return False
     
     def _load_historical_bars(self):
-        """Load historical bars to initialize the signal detector - FULL DAY from 9:30 AM"""
+        """Load historical bars to initialize the signal detector - INCLUDING OVERNIGHT for VA"""
         try:
             from datetime import datetime, timedelta, time as dt_time
             import pytz
@@ -328,19 +328,21 @@ class TradingBot:
             et = pytz.timezone('US/Eastern')
             now_et = datetime.now(et)
             
-            # Calculate bars needed from 9:30 AM today to now
+            # Calculate bars needed - include overnight session for VA calculation
+            # Globex opens 6pm ET previous day, so we need ~200 bars to cover overnight + RTH
             market_open = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
             
             if now_et < market_open:
-                # Before market open - load previous day's data
-                logger.info("Before market open - loading previous day data")
-                num_bars = 100
+                # Before market open - load overnight data
+                logger.info("Before market open - loading overnight data for VA")
+                num_bars = 200  # Cover overnight session
             else:
-                # Calculate how many 5-min bars since market open
+                # Calculate bars since 6pm previous day (globex open)
+                # That's ~15.5 hours = 930 minutes = 186 bars on 5-min
                 minutes_since_open = (now_et - market_open).total_seconds() / 60
-                num_bars = int(minutes_since_open / 5) + 10  # +10 for buffer
-                num_bars = max(num_bars, 100)  # At least 100 bars
-                logger.info(f"Market open, loading {num_bars} bars to cover full day from 9:30 AM")
+                num_bars = int(minutes_since_open / 5) + 200  # +200 for overnight
+                num_bars = max(num_bars, 200)
+                logger.info(f"Market open, loading {num_bars} bars (including overnight for VA)")
             
             logger.info(f"Loading last {num_bars} bars to initialize detector...")
             
@@ -348,31 +350,38 @@ class TradingBot:
                 symbol=self.config.trading.symbol,
                 num_bars=num_bars,
                 bar_minutes=5,
-                extended_hours=False  # RTH only for cleaner data
+                extended_hours=True  # Include overnight/globex for VA calculation
             )
             
             if not bars:
                 logger.warning("No historical bars available - starting fresh")
                 return
             
-            logger.info(f"Loaded {len(bars)} historical bars")
+            logger.info(f"Loaded {len(bars)} historical bars (including overnight)")
             
-            # Filter to only TODAY's RTH bars (9:30-16:00) for proper state initialization
+            # For VA calculation: use TODAY's bars (overnight + RTH)
+            # Overnight session starts 6pm previous day, but for simplicity we use
+            # bars from midnight today onwards, plus any from after 6pm yesterday
             today = date.today()
-            rth_start = dt_time(9, 30)
+            yesterday = today - timedelta(days=1)
+            overnight_start = dt_time(18, 0)  # 6pm globex open
             rth_end = dt_time(16, 0)
             
-            todays_rth_bars = [
+            # Include: yesterday after 6pm + all of today until now
+            todays_session_bars = [
                 b for b in bars 
-                if b['datetime'].date() == today 
-                and rth_start <= b['datetime'].time() < rth_end
+                if (b['datetime'].date() == yesterday and b['datetime'].time() >= overnight_start)
+                or (b['datetime'].date() == today and b['datetime'].time() < rth_end)
             ]
             
-            if todays_rth_bars:
-                logger.info(f"Found {len(todays_rth_bars)} RTH bars from today (filtering out prior days and globex)")
-                bars_to_process = todays_rth_bars
+            if todays_session_bars:
+                overnight_count = len([b for b in todays_session_bars if b['datetime'].date() == yesterday])
+                rth_count = len([b for b in todays_session_bars 
+                               if b['datetime'].date() == today and b['datetime'].time() >= dt_time(9, 30)])
+                logger.info(f"Found {len(todays_session_bars)} session bars ({overnight_count} overnight + {rth_count} RTH)")
+                bars_to_process = todays_session_bars
             else:
-                logger.warning("No RTH bars from today found - using all historical bars")
+                logger.warning("No session bars found - using all historical bars")
                 bars_to_process = bars
             
             # IMPORTANT: Reset detector session BEFORE loading bars
@@ -380,10 +389,12 @@ class TradingBot:
             logger.info("Resetting detector session for fresh start...")
             self.detector.reset_session()
             
-            # Check if we have OR period bars (9:30 - 10:00 AM)
-            or_bars = [b for b in bars_to_process if b['datetime'].date() == today 
+            # Check if we have OR period bars (9:30 - 10:00 AM) - RTH only
+            or_bars = [b for b in bars_to_process 
+                       if b['datetime'].date() == today 
                        and b['datetime'].hour == 9 and b['datetime'].minute >= 30]
-            or_bars += [b for b in bars_to_process if b['datetime'].date() == today 
+            or_bars += [b for b in bars_to_process 
+                        if b['datetime'].date() == today 
                         and b['datetime'].hour == 10 and b['datetime'].minute == 0]
             
             if or_bars:

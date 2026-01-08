@@ -225,7 +225,13 @@ class SignalDetector:
             return self.signal_cooldown_bars
     
     def reset_session(self) -> None:
-        """Reset session state for new trading day"""
+        """Reset session state for new trading day.
+        
+        NOTE: We keep self.bars intact for StdDev calculation.
+        Session VWAP counters are reset, but bar history is preserved.
+        This matches ToS behavior where StDev(close, 20) uses rolling bars
+        regardless of session boundary.
+        """
         # Save prior day values
         if self.session_high > 0:
             va = self._calculate_value_area()
@@ -233,15 +239,19 @@ class SignalDetector:
             self.prior_day_val = va.val
             self.prior_day_poc = va.poc
         
-        # Reset session
+        # Reset session counters (but NOT self.bars - needed for StdDev)
         self.session_high = 0
         self.session_low = float('inf')
         self.session_volume = 0
         self.session_vwap_sum = 0
         self.session_vol_weighted = 0
         
-        # FIX: Clear bars from previous session to prevent cross-day pollution
-        self.bars.clear()
+        # Reset session date tracking
+        self._session_date = None
+        
+        # NOTE: We do NOT clear self.bars anymore
+        # Bars are needed for StdDev calculation across session boundaries
+        # Old code: self.bars.clear()
         
         # Reset opening range
         self.or_high = 0
@@ -253,14 +263,14 @@ class SignalDetector:
         # Reset daily trade count
         self.daily_trade_count = 0
         
-        # FIX: Reset position tracking counters
+        # Reset position tracking counters
         self.bars_above_vah = 0
         self.bars_below_val = 0
         
-        # FIX: Reset cooldown tracking
+        # Reset cooldown tracking
         self.bars_since_signal = 999
         
-        logger.info("Session reset for new trading day")
+        logger.info("Session reset for new trading day (bars preserved for StdDev)")
     
     def add_bar(self, bar: Bar, suppress_signals: bool = False) -> Optional[Signal]:
         """
@@ -273,9 +283,24 @@ class SignalDetector:
         
         Returns Signal if one is generated, None otherwise.
         """
-        # Check for new day
-        if self.bars and bar.timestamp.date() != self.bars[-1].timestamp.date():
-            self.reset_session()
+        # Check for new TRADING session (not just new calendar day)
+        # A trading session runs from 6pm ET to 4pm ET next day
+        # So overnight->RTH transition should NOT reset (same session)
+        # Only reset if: new globex session starts (after 6pm gap) or multi-day gap
+        if self.bars:
+            prev_bar = self.bars[-1]
+            time_gap = (bar.timestamp - prev_bar.timestamp).total_seconds() / 3600  # hours
+            
+            # Reset if:
+            # 1. Gap > 2 hours (missed a session)
+            # 2. Current bar is after 6pm AND previous bar was before 4pm same day (new globex session)
+            is_new_globex = (bar.timestamp.time() >= time(18, 0) and 
+                            prev_bar.timestamp.time() < time(16, 0) and
+                            bar.timestamp.date() == prev_bar.timestamp.date())
+            
+            if time_gap > 2 or is_new_globex:
+                logger.info(f"New trading session detected (gap={time_gap:.1f}h)")
+                self.reset_session()
         
         # Reset cooldown at RTH open (9:30 AM) so globex signals don't suppress morning signals
         bar_time = bar.timestamp.time()
@@ -397,17 +422,41 @@ class SignalDetector:
         return signal
     
     def _update_session(self, bar: Bar) -> None:
-        """Update session-level tracking"""
-        if bar.high > self.session_high:
-            self.session_high = bar.high
-        if bar.low < self.session_low:
-            self.session_low = bar.low
+        """Update session-level tracking.
         
-        self.session_volume += bar.volume
+        NOTE: Session VWAP only accumulates bars from TODAY (after midnight)
+        to match ToS behavior where isNewDay = GetDay() != GetDay()[1].
+        Overnight bars are still kept in self.bars for StdDev calculation.
+        """
+        # Check if this bar is from today (after midnight)
+        # ToS resets session at midnight, so only include today's bars in VWAP
+        today = date.today()
+        bar_date = bar.timestamp.date()
         
-        typical_price = (bar.high + bar.low + bar.close) / 3
-        self.session_vwap_sum += bar.volume * typical_price
-        self.session_vol_weighted += bar.volume * ((bar.high + bar.low) / 2)
+        # Track session date for detecting midnight crossing
+        if not hasattr(self, '_session_date') or self._session_date != today:
+            # New calendar day - reset session counters (but NOT self.bars)
+            if hasattr(self, '_session_date') and self._session_date is not None:
+                logger.info(f"Midnight crossing detected - resetting session VWAP (keeping bars for StdDev)")
+            self._session_date = today
+            self.session_high = 0
+            self.session_low = float('inf')
+            self.session_volume = 0
+            self.session_vwap_sum = 0
+            self.session_vol_weighted = 0
+        
+        # Only accumulate VWAP for TODAY's bars (matching ToS session boundary)
+        if bar_date == today:
+            if bar.high > self.session_high:
+                self.session_high = bar.high
+            if bar.low < self.session_low:
+                self.session_low = bar.low
+            
+            self.session_volume += bar.volume
+            
+            typical_price = (bar.high + bar.low + bar.close) / 3
+            self.session_vwap_sum += bar.volume * typical_price
+            self.session_vol_weighted += bar.volume * ((bar.high + bar.low) / 2)
     
     def _update_opening_range(self, bar: Bar) -> None:
         """Update opening range tracking"""
