@@ -39,6 +39,7 @@ from position_manager import PositionManager
 from notifications import get_notifier, PushoverNotifier
 from analytics import get_tracker, PerformanceTracker
 from gamma_context import GammaContext, GammaRegime
+from economic_calendar import EconomicCalendar
 
 # Eastern timezone
 try:
@@ -111,6 +112,10 @@ class TradingBot:
         # Gamma context for signal filtering
         self.gamma_context: Optional[GammaContext] = None
         self._today_open_price: Optional[float] = None  # Track today's open for gamma calc
+        
+        # Economic calendar for event alerts
+        self.economic_calendar: Optional[EconomicCalendar] = None
+        self._economic_alert_sent_today: Optional[date] = None
         
         # Intra-bar tracking
         self._current_bar_period: Optional[int] = None  # Which 5-min period we're in
@@ -241,7 +246,15 @@ class TradingBot:
                 # Butterfly mode
                 butterfly_mode=self.config.trading.butterfly_mode,
                 butterfly_wing_width=self.config.trading.butterfly_wing_width,
-                butterfly_credit_target_pct=self.config.trading.butterfly_credit_target_pct
+                butterfly_credit_target_pct=self.config.trading.butterfly_credit_target_pct,
+                # Kelly Criterion position sizing for butterflies
+                use_kelly_sizing=self.config.trading.use_kelly_sizing,
+                kelly_win_rate=self.config.trading.kelly_win_rate,
+                kelly_avg_win=self.config.trading.kelly_avg_win,
+                kelly_avg_loss=self.config.trading.kelly_avg_loss,
+                kelly_fraction=self.config.trading.kelly_fraction,
+                kelly_max_contracts=self.config.trading.kelly_max_contracts,
+                kelly_min_contracts=self.config.trading.kelly_min_contracts
             )
             
             # Log if using symbol mapping
@@ -258,6 +271,14 @@ class TradingBot:
                     strike_width=self.config.signal.gamma_strike_width
                 )
                 logger.info("Gamma context initialized - signal filtering enabled")
+            
+            # Initialize economic calendar for event alerts
+            # Uses FMP API if FMP_API_KEY is set, otherwise falls back to static data
+            self.economic_calendar = EconomicCalendar(
+                api_key=os.getenv("FMP_API_KEY"),
+                notify_callback=lambda msg, title: self.notifier.send(msg, title=title)
+            )
+            logger.info("Economic calendar initialized")
             
             # Sync with broker if live trading
             if not self.config.paper_trading:
@@ -1030,6 +1051,9 @@ class TradingBot:
                 # Check for scheduled reports (daily summary, weekly report)
                 self.tracker.check_scheduled_reports()
                 
+                # Check for economic calendar alerts at market open
+                self._check_market_open_alert()
+                
                 # Check market hours
                 if not self.is_market_open():
                     if self.config.time.rth_only:
@@ -1114,6 +1138,30 @@ class TradingBot:
             except Exception as e:
                 logger.error(f"Error in main loop: {e}")
                 time.sleep(10)  # Wait before retrying
+    
+    def _check_market_open_alert(self) -> None:
+        """
+        Send economic calendar alert once per day at market open.
+        Called from run_loop after new trading day check.
+        """
+        if not self.economic_calendar:
+            return
+        
+        today = date.today()
+        
+        # Only send once per day
+        if self._economic_alert_sent_today == today:
+            return
+        
+        # Send at market open (9:30-9:35 AM ET window)
+        now = get_et_now()
+        if now.hour == 9 and 30 <= now.minute < 35:
+            try:
+                logger.info("Sending economic calendar alert...")
+                self.economic_calendar.send_daily_alert()
+                self._economic_alert_sent_today = today
+            except Exception as e:
+                logger.error(f"Failed to send economic calendar alert: {e}")
     
     def log_status(self) -> None:
         """Log current bot status"""

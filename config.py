@@ -10,6 +10,9 @@ Optimization Results:
 - Profit Factor: 3.25
 - Sharpe Ratio: 5.58
 - Max Drawdown: $32,715.08
+
+UPDATED 2026-01-08:
+- Added Kelly Criterion position sizing for butterfly trades
 """
 import os
 from dataclasses import dataclass, field
@@ -38,6 +41,28 @@ class TradingConfig:
     butterfly_mode: bool = False
     butterfly_wing_width: int = 5  # Points between strikes
     butterfly_credit_target_pct: float = 0.30  # Target 30% credit over wing cost
+    
+    # ==========================================================================
+    # KELLY CRITERION POSITION SIZING FOR BUTTERFLIES
+    # ==========================================================================
+    # Kelly formula: f* = (bp - q) / b
+    # Where: b = win/loss ratio, p = win probability, q = loss probability
+    #
+    # For butterflies:
+    # - Win = credit received (if expires OTM or between wings)
+    # - Loss = max loss = wing_width * 100 - credit
+    # - Historical win rate determines p
+    #
+    # IMPORTANT: Start with conservative win rate (0.50-0.65) and update
+    # based on YOUR actual paper trading results after 20-30 trades.
+    # ==========================================================================
+    use_kelly_sizing: bool = True
+    kelly_win_rate: float = 0.65  # Start conservative, update from paper trading
+    kelly_avg_win: float = 1.0  # Average win as multiple of credit (1.0 = keep full credit)
+    kelly_avg_loss: float = 2.5  # Average loss as multiple of credit (risk/reward)
+    kelly_fraction: float = 0.25  # Fraction of Kelly to use (0.25 = quarter Kelly, safer)
+    kelly_max_contracts: int = 10  # Hard cap on contracts regardless of Kelly
+    kelly_min_contracts: int = 1  # Minimum contracts to trade
     
     # Delta targeting
     use_delta_targeting: bool = True
@@ -84,6 +109,30 @@ class TradingConfig:
     def option_symbol(self) -> str:
         """Returns the symbol to use for option trading (execution_symbol if set, else signal symbol)"""
         return self.execution_symbol or self.symbol
+    
+    def calculate_kelly_fraction(self) -> float:
+        """
+        Calculate Kelly Criterion bet fraction.
+        
+        Kelly formula: f* = (bp - q) / b
+        Where:
+            b = odds (avg_win / avg_loss)
+            p = probability of winning
+            q = probability of losing (1 - p)
+        
+        Returns: Optimal fraction of bankroll to risk (before applying kelly_fraction multiplier)
+        """
+        p = self.kelly_win_rate
+        q = 1 - p
+        b = self.kelly_avg_win / self.kelly_avg_loss if self.kelly_avg_loss > 0 else 0
+        
+        if b <= 0:
+            return 0
+        
+        kelly = (b * p - q) / b
+        
+        # Kelly can be negative if edge is negative - don't bet
+        return max(0, kelly)
 
 
 @dataclass

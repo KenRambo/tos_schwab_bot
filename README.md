@@ -5,9 +5,12 @@ A Python trading bot that replicates the signal logic from your ThinkOrSwim Auct
 **Supports:**
 - SPY/QQQ single-leg options (calls/puts)
 - **ES futures signals → SPX butterfly credit spreads** (new!)
+- **Kelly Criterion position sizing for butterflies** (new!)
 - Multi-symbol daemon mode
 
 ## 🎯 Latest Optimization Results (January 2026)
+
+*Note: These results are from backtesting the **single-leg options strategy** (SPY calls/puts). Butterfly mode is new and should be paper traded to establish your own win rate before live trading.*
 
 **Variant A (Aggressive) - Best Single Run:**
 | Metric | Value |
@@ -20,6 +23,71 @@ A Python trading bot that replicates the signal logic from your ThinkOrSwim Auct
 | Max Drawdown | $32,715 |
 
 **Key Finding:** Enabling short signals (VAH rejection + breakdown) increased P&L by 2.5x compared to long-only strategy.
+
+## 📅 Economic Calendar Alerts (New!)
+
+The bot sends daily alerts about high-impact economic events (FOMC, CPI, NFP, etc.) at market open.
+
+### Setup
+
+**Option 1: With FMP API (more events)**
+1. Get a free API key from [Financial Modeling Prep](https://financialmodelingprep.com/developer/docs/)
+2. Set the environment variable:
+   ```bash
+   export FMP_API_KEY="your_api_key_here"
+   ```
+
+**Option 2: Without API (static data)**
+No setup required! The bot includes static calendars for major events (FOMC, CPI, NFP, GDP, PCE) through 2026.
+
+### Usage
+
+**Standalone (for testing):**
+```bash
+# Daily alert
+python economic_calendar.py --daily
+
+# Weekly summary
+python economic_calendar.py --weekly
+
+# Check specific date
+python economic_calendar.py --date 2026-01-28
+
+# Check if high-impact events today
+python economic_calendar.py --check
+```
+
+**Integrated with bot:**
+The bot automatically sends an alert at 9:30 AM ET with today's high-impact events:
+```
+📅 Thursday, Jan 09, 2026
+⚠️ 1 High-Impact Event Today
+──────────────────────────────
+🔴 08:30 ET - Non-Farm Payrolls
+──────────────────────────────
+💡 Consider adjusting position size near event times.
+```
+
+**Cron job (alternative):**
+```bash
+# Add to crontab for 9:30 AM ET weekdays
+30 9 * * 1-5 cd /path/to/bot && python economic_calendar.py --daily
+
+# Weekly summary Sunday evening
+0 20 * * 0 cd /path/to/bot && python economic_calendar.py --weekly
+```
+
+### High-Impact Events Tracked
+
+**With API (FMP):** All US economic events marked as high-impact
+
+**Static Calendar (no API):**
+- **Fed:** FOMC Interest Rate Decisions (8 per year)
+- **Inflation:** CPI (monthly), Core PCE (monthly)
+- **Employment:** Non-Farm Payrolls (monthly)
+- **Growth:** GDP (quarterly)
+
+---
 
 ## 🦋 Butterfly Credit Spread Mode (New!)
 
@@ -41,6 +109,151 @@ python trading_bot.py --symbol /ES --execution-symbol SPX --butterfly
 - On LONG signal → Opens call butterfly on SPX
 - On SHORT signal → Opens put butterfly on SPX
 - Collects credit on each butterfly for "credit stacking" strategy
+- **Kelly Criterion** automatically sizes position based on win rate and bankroll
+
+### Butterfly Execution Logic
+
+When a signal fires, the bot:
+
+1. **Calculates strikes** based on underlying price and symbol-specific width:
+   - SPX: $5 strike width
+   - XSP: $1 strike width
+   - SPY: $1 strike width
+
+2. **Builds option symbols** in OCC 21-character format:
+   ```
+   SPXW  260109P05910000
+   └──┘  └────┘└┘└──────┘
+    6      6   1    8     = 21 chars
+   root   date P  strike×1000
+   ```
+   - Root: 6 chars padded (SPXW + 2 spaces)
+   - Date: YYMMDD
+   - Type: C or P
+   - Strike: 8 digits (strike × 1000, zero-padded)
+
+3. **Prices the butterfly**:
+   - Wing debit = lower_ask + upper_ask
+   - Middle credit = middle_bid × 2
+   - Target credit = wing_debit × credit_target_pct (default 30%)
+
+4. **Sizes position via Kelly Criterion** (if enabled):
+   - Calculates optimal bet fraction based on win rate
+   - Applies fractional Kelly (default 25% = quarter Kelly)
+   - Respects min/max contract limits
+
+5. **Places order** using one of two methods:
+
+   **TRIGGER (OTO) - Default:**
+   ```
+   Primary:   BUY lower + BUY upper @ MARKET
+   Triggered: SELL 2x middle @ LIMIT (fires when wings fill)
+   ```
+
+   **SEQUENTIAL - Fallback:**
+   ```
+   Step 1: BUY lower + upper @ MARKET
+   Step 2: Wait for fill (up to 30s)
+   Step 3: SELL 2x middle @ LIMIT
+   ```
+
+   The bot tries TRIGGER first and automatically falls back to SEQUENTIAL if the broker doesn't support OTO orders.
+
+6. **Sends notification** with full breakdown:
+   ```
+   🦋 🟢 SPX ×3 Butterfly ✓
+   LONG CALL ×3
+   Strikes: 5900/5905/5910
+   ─────────────────
+   Wings: $20.40 debit
+   Middle: 2×$13.50=$27.00
+   ─────────────────
+   Net Credit: $6.60 (32.4%)
+   Target: $6.12 (30%) ✓
+   ─────────────────
+   Qty: 3 | 💰 $1,980.00
+   ```
+
+## 📊 Kelly Criterion Position Sizing (New!)
+
+The bot uses Kelly Criterion to optimally size butterfly positions based on your historical win rate and risk/reward ratio.
+
+### How Kelly Works
+
+The Kelly formula determines what fraction of your bankroll to bet:
+
+```
+f* = (bp - q) / b
+
+Where:
+  b = win/loss ratio (avg_win / avg_loss)
+  p = probability of winning (win rate)
+  q = probability of losing (1 - p)
+```
+
+For a 65% win rate with 1:2.5 risk/reward:
+```
+b = 1.0 / 2.5 = 0.4
+p = 0.65
+q = 0.35
+
+f* = (0.4 × 0.65 - 0.35) / 0.4
+f* = 0.10 = 10% of bankroll
+```
+
+### Fractional Kelly (Safer)
+
+Full Kelly is aggressive and assumes perfect knowledge. We use **fractional Kelly** (default 25%) for safety:
+
+```
+Adjusted Kelly = Full Kelly × kelly_fraction
+               = 10% × 0.25
+               = 2.5% of bankroll
+```
+
+### Position Sizing Example
+
+With a $50,000 account trading 5-point SPX butterflies at $3 net credit:
+
+```
+Max loss per butterfly = ($5 × 100) - ($3 × 100) = $200
+
+Risk amount = $50,000 × 2.5% = $1,250
+Contracts = $1,250 ÷ $200 = 6.25 → 6 contracts
+```
+
+### Kelly Configuration
+
+```python
+# In config.py - TradingConfig
+use_kelly_sizing: bool = True           # Enable Kelly position sizing
+kelly_win_rate: float = 0.65            # Your win rate (start conservative, update from paper trading)
+kelly_avg_win: float = 1.0              # Avg win as multiple of credit (keep full credit)
+kelly_avg_loss: float = 2.5             # Avg loss as multiple of credit
+kelly_fraction: float = 0.25            # Fraction of Kelly (0.25 = quarter Kelly)
+kelly_max_contracts: int = 10           # Hard cap on contracts
+kelly_min_contracts: int = 1            # Minimum contracts to trade
+```
+
+**Important:** The `kelly_win_rate` should be based on YOUR actual butterfly trading results. Start with a conservative estimate (0.50-0.65) and update it after paper trading for at least 20-30 trades.
+
+### Kelly Settings by Risk Profile
+
+| Profile | kelly_fraction | Max Contracts | Description |
+|---------|----------------|---------------|-------------|
+| Conservative | 0.10 | 3 | ~2% of bankroll per trade |
+| Moderate | 0.25 | 5 | ~5% of bankroll per trade |
+| Aggressive | 0.50 | 10 | ~10% of bankroll per trade |
+| Full Kelly | 1.00 | 20 | ~19% of bankroll (risky!) |
+
+### Disabling Kelly Sizing
+
+To use fixed contract size instead:
+
+```python
+use_kelly_sizing: bool = False
+contracts: int = 2  # Fixed 2 contracts per trade
+```
 
 ## 📊 Gamma Exposure Filter (New!)
 
@@ -77,6 +290,11 @@ Filters signals based on dealer gamma positioning to avoid trading against marke
 
 | Bug | Symptom | Fix |
 |-----|---------|-----|
+| **Target credit not used** | Orders placed at theoretical price | Now uses target_net_credit for limit orders |
+| **Butterfly quantity hardcoded** | Always traded 1 contract | Now supports Kelly sizing with multiple contracts |
+| **Paper trading unrealistic** | Hardcoded prices | Now simulates delta decay by strike distance |
+| **No fill verification** | Assumed fill at limit | Now polls order status for actual fill price |
+| **Symbol-specific width missing** | SPX/XSP used same width | Now uses 5pt for SPX, 1pt for XSP |
 | **No VA at market open** | "need 20 bars" until 11:10 AM | Load overnight bars for VA, fixed session reset logic |
 | **Drawdown alert spam** | Alert every 5 seconds | Throttled to max 1 per 30 minutes |
 | **VA shows 0.00 after restart** | "need 20 bars, have 67" but VA=0 | Filter for RTH-only bars, reset session before load |
@@ -111,6 +329,7 @@ The bot implements your "hold until opposite signal" strategy - positions are he
 - SHORT Signal → Put butterfly (buy lower/upper, sell 2× middle)
 - Collect net credit on each trade ("credit stacking")
 - Supports SPX ($5 strikes) and XSP ($1 strikes)
+- **Kelly Criterion** position sizing based on win rate
 
 ### Signal Detection (Matching Your ToS Indicator)
 
@@ -185,11 +404,12 @@ python trading_bot.py --symbol /NQ --execution-symbol QQQ
 
 ### Position Sizing & Risk Management
 
-- **Fixed Fractional Sizing** - Size positions based on account balance
+- **Kelly Criterion Sizing** - Optimal position size based on win rate (butterflies)
+- **Fixed Fractional Sizing** - Size positions based on account balance (single-leg)
 - **Trailing Stop** - 21% trail with 32% activation threshold
 - **Daily Loss Limit** - Stop trading if daily loss exceeds $500 or 5% of account
 - **Delta Exposure Check** - Prevents overexposure by limiting total delta
-- **Max Position Size** - Hard cap on contracts (default: 99)
+- **Max Position Size** - Hard cap on contracts (Kelly: 10, single-leg: 99)
 
 ### Monitoring & Analytics
 
@@ -205,7 +425,7 @@ Get mobile alerts for:
 - 📈📉 Signal detected
 - 🟢🔴 Trade executed
 - 💰💸 Position closed (with P&L)
-- 🦋 Butterfly filled (with credit collected)
+- 🦋 Butterfly filled (with credit collected, quantity, Kelly sizing)
 - 🦋 Butterfly rejected
 - 💳 Insufficient buying power
 - 🔻 Drawdown alert
@@ -328,6 +548,33 @@ python trading_bot.py -s /ES -e SPX --butterfly
 python trading_bot.py -s /NQ -e QQQ
 ```
 
+### Testing Butterfly Orders
+
+Use the test script to verify API connectivity without risking fills:
+
+```bash
+# Paper mode (default) - logs what would be sent
+python test_butterfly_order.py
+
+# Live TRIGGER mode - places OTO order that won't fill (low credit)
+python test_butterfly_order.py --live
+
+# Live SEQUENTIAL mode - places separate wing/middle orders
+python test_butterfly_order.py --live --sequential
+
+# Live mode with auto-cancel
+python test_butterfly_order.py --live --cancel
+
+# Custom settings
+python test_butterfly_order.py --live --symbol SPX --width 5 --credit 0.05
+```
+
+**Order Modes:**
+- **TRIGGER (default)**: One-Triggers-Other order - wings trigger middle sell
+- **SEQUENTIAL**: Place wings first, wait for fill, then place middle sell
+
+If TRIGGER mode returns an error, try `--sequential` to see if your broker supports that format instead.
+
 ### Interactive Mode
 
 ```bash
@@ -358,9 +605,18 @@ class TradingConfig:
     max_daily_trades: int = 6              # OPTIMIZED (was 3)
     
     # Butterfly Mode (for SPX/XSP credit stacking)
-    butterfly_mode: bool = False           # NEW: Enable with --butterfly
+    butterfly_mode: bool = False           # Enable with --butterfly
     butterfly_wing_width: int = 5          # Points between strikes
     butterfly_credit_target_pct: float = 0.30  # Target 30% credit
+    
+    # Kelly Criterion Position Sizing (for butterflies)
+    use_kelly_sizing: bool = True          # Enable Kelly position sizing
+    kelly_win_rate: float = 0.65           # Start conservative, update from paper trading
+    kelly_avg_win: float = 1.0             # Avg win = keep full credit
+    kelly_avg_loss: float = 2.5            # Avg loss = 2.5× credit
+    kelly_fraction: float = 0.25           # Quarter Kelly (safer)
+    kelly_max_contracts: int = 10          # Hard cap
+    kelly_min_contracts: int = 1           # Minimum
     
     # Option Selection - HIGH DELTA ATM
     use_delta_targeting: bool = True
@@ -369,7 +625,7 @@ class TradingConfig:
     min_days_to_expiry: int = 0            # 0DTE
     max_days_to_expiry: int = 0
     
-    # Position Sizing
+    # Position Sizing (single-leg)
     use_fixed_fractional: bool = True
     risk_percent_per_trade: float = 23.0   # OPTIMIZED (aggressive)
     max_position_size: int = 99            # OPTIMIZED
@@ -445,10 +701,10 @@ When switching to live, you must type `CONFIRM` when prompted (or use `--no-conf
 ```
 tos_schwab_bot/
 ├── trading_bot.py       # Main bot application (supports --butterfly, --execution-symbol)
-├── config.py            # Configuration settings (auto-generated)
+├── config.py            # Configuration settings (includes Kelly params)
 ├── signal_detector.py   # Signal detection logic
-├── position_manager.py  # Position/trade management (supports butterflies)
-├── gamma_context.py     # Gamma exposure calculations and filtering (NEW)
+├── position_manager.py  # Position/trade management (butterflies + Kelly sizing)
+├── gamma_context.py     # Gamma exposure calculations and filtering
 ├── schwab_auth.py       # OAuth2 authentication
 ├── schwab_client.py     # Schwab API client
 ├── notifications.py     # Pushover push notifications
@@ -456,6 +712,9 @@ tos_schwab_bot/
 │
 ├── # Daemon Management
 ├── bot.sh               # Multi-symbol daemon manager
+│
+├── # Testing
+├── test_butterfly_order.py  # Test live butterfly orders (won't fill)
 │
 ├── # Optimization Tools
 ├── optimizer_simple.py      # Simplified optimizer (high delta focus)
@@ -509,18 +768,23 @@ tos_schwab_bot/
 6. Generate signal if conditions met AND signal type is enabled
 ```
 
-### Trade Execution Flow
+### Butterfly Trade Execution Flow
 
 ```
 1. Signal detected (e.g., VAL_BOUNCE = LONG)
 2. Check daily loss limit
-3. Check delta exposure limit
-4. Calculate position size (fixed fractional)
-5. Find option at target delta (67Δ morning, 83Δ afternoon)
-6. Verify buying power
-7. Place market order via Schwab API
-8. Track position until opposite signal
-9. Record P&L, update analytics
+3. Get underlying price (SPX for SPX/XSP)
+4. Calculate strikes with symbol-specific width (5pt SPX, 1pt XSP)
+5. Get butterfly prices (wings + middle)
+6. Calculate target credit = wing_debit × credit_target_pct
+7. Calculate quantity via Kelly Criterion:
+   - Full Kelly = (bp - q) / b
+   - Adjusted Kelly = Full Kelly × kelly_fraction
+   - Risk amount = account × Adjusted Kelly
+   - Contracts = Risk amount ÷ max_loss_per_contract
+8. Place limit order at target credit
+9. Verify fill (poll order status)
+10. Track credits, send notification
 ```
 
 ### Session Reset Flow (New Trading Day)
@@ -906,29 +1170,48 @@ The Python signal detection mirrors your ToS script logic:
 2025-01-02 11:45:05 ET - INFO - ⚠️ Signal blocked by gamma filter: ✗ BREAKOUT blocked in +gamma (breakouts get faded)
 ```
 
-### Butterfly Mode (--butterfly)
+### Butterfly Mode with Kelly Sizing (--butterfly)
 
 ```
-2026-01-06 10:35:02 ET - INFO - ============================================================
-2026-01-06 10:35:02 ET - INFO - 🦋 BUTTERFLY SIGNAL: SHORT PUT
-2026-01-06 10:35:02 ET - INFO -    Signal: VAH_REJECTION
-2026-01-06 10:35:02 ET - INFO -    Price: $6045.25
-2026-01-06 10:35:02 ET - INFO - ============================================================
-2026-01-06 10:35:02 ET - INFO -    Underlying: $6045.25
-2026-01-06 10:35:02 ET - INFO -    Strikes: 6030/6035/6040
-2026-01-06 10:35:02 ET - INFO -    ┌─ BUTTERFLY STRUCTURE ─────────────────────
-2026-01-06 10:35:02 ET - INFO -    │ Lower wing (6030): $4.90 debit
-2026-01-06 10:35:02 ET - INFO -    │ Middle x2  (6035): $7.40 × 2 = $14.80 credit
-2026-01-06 10:35:02 ET - INFO -    │ Upper wing (6040): $5.10 debit
-2026-01-06 10:35:02 ET - INFO -    ├───────────────────────────────────────────
-2026-01-06 10:35:02 ET - INFO -    │ Wing debit:     $10.00
-2026-01-06 10:35:02 ET - INFO -    │ Middle credit:  $14.80
-2026-01-06 10:35:02 ET - INFO -    │ Theoretical net: $4.80
-2026-01-06 10:35:02 ET - INFO -    │ Target credit:  $13.00 (30% above wings)
-2026-01-06 10:35:02 ET - INFO -    └───────────────────────────────────────────
-2026-01-06 10:35:02 ET - INFO -    ✓ FILLED @ net credit $4.80
-2026-01-06 10:35:02 ET - INFO -    💰 CREDIT STACKED: $480.00
-2026-01-06 10:35:02 ET - INFO -    📊 Credits today: $480.00 | Total: $2,340.00
+2026-01-08 10:35:02 ET - INFO - ============================================================
+2026-01-08 10:35:02 ET - INFO - 🦋 BUTTERFLY SIGNAL: SHORT PUT
+2026-01-08 10:35:02 ET - INFO -    Signal: VAH_REJECTION
+2026-01-08 10:35:02 ET - INFO -    Price: $5925.50
+2026-01-08 10:35:02 ET - INFO - ============================================================
+2026-01-08 10:35:02 ET - INFO -    Underlying: $5925.50
+2026-01-08 10:35:02 ET - INFO -    Strikes: 5910/5915/5920 (width: 5)
+2026-01-08 10:35:02 ET - INFO -    ┌─ BUTTERFLY STRUCTURE ─────────────────────
+2026-01-08 10:35:02 ET - INFO -    │ Lower wing (5910): $8.40 debit
+2026-01-08 10:35:02 ET - INFO -    │ Middle x2  (5915): $11.20 × 2 = $22.40 credit
+2026-01-08 10:35:02 ET - INFO -    │ Upper wing (5920): $9.60 debit
+2026-01-08 10:35:02 ET - INFO -    ├───────────────────────────────────────────
+2026-01-08 10:35:02 ET - INFO -    │ Wing debit:       $18.00
+2026-01-08 10:35:02 ET - INFO -    │ Middle credit:    $22.40
+2026-01-08 10:35:02 ET - INFO -    │ Theoretical net:  $4.40
+2026-01-08 10:35:02 ET - INFO -    ├───────────────────────────────────────────
+2026-01-08 10:35:02 ET - INFO -    │ Target credit %:  30%
+2026-01-08 10:35:02 ET - INFO -    │ Target net:       $5.40
+2026-01-08 10:35:02 ET - INFO -    │ Required middle:  $11.70 each ($23.40 total)
+2026-01-08 10:35:02 ET - INFO -    └───────────────────────────────────────────
+2026-01-08 10:35:02 ET - INFO -    ┌─ POSITION SIZING ──────────────────────────
+2026-01-08 10:35:02 ET - INFO -    │ Kelly sizing: ENABLED
+2026-01-08 10:35:02 ET - INFO -    │ Win rate: 65.0%
+2026-01-08 10:35:02 ET - INFO -    │ Full Kelly: 10.0%
+2026-01-08 10:35:02 ET - INFO -    │ Fractional (25%): 2.5%
+2026-01-08 10:35:02 ET - INFO -    │ Contracts: 2
+2026-01-08 10:35:02 ET - INFO -    └───────────────────────────────────────────
+2026-01-08 10:35:02 ET - INFO - Kelly sizing: $50,000 × 2.50% = $1,250 risk
+2026-01-08 10:35:02 ET - INFO - Kelly sizing: $1,250 ÷ $126 max loss = 2 contracts
+2026-01-08 10:35:02 ET - INFO - [PAPER] 🦋 Butterfly order (×2):
+2026-01-08 10:35:02 ET - INFO - [PAPER]   BUY  2x 5910 PUT
+2026-01-08 10:35:02 ET - INFO - [PAPER]   SELL 4x 5915 PUT
+2026-01-08 10:35:02 ET - INFO - [PAPER]   BUY  2x 5920 PUT
+2026-01-08 10:35:02 ET - INFO - [PAPER]   Limit Credit: $5.40 per spread
+2026-01-08 10:35:02 ET - INFO - [PAPER]   ✓ Filled @ $5.40
+2026-01-08 10:35:02 ET - INFO -    ✓ FILLED 2x @ net credit $5.40
+2026-01-08 10:35:02 ET - INFO -    📊 Credit achieved: 30.0% (target: 30%)
+2026-01-08 10:35:02 ET - INFO -    💰 CREDIT STACKED: $1,080.00 (2 contracts)
+2026-01-08 10:35:02 ET - INFO -    📊 Credits today: $1,080.00 | Total: $3,240.00
 ```
 
 ## Safety Features
@@ -943,6 +1226,7 @@ The Python signal detection mirrors your ToS script logic:
 8. **Drawdown Alerts** - Notifies when down 10%+ from peak
 9. **Gamma Filter** - Blocks momentum signals in mean-reversion environments
 10. **Missed Signal Alerts** - Notifies of signals that occurred while bot was offline
+11. **Kelly Position Limits** - Hard cap on contracts regardless of Kelly sizing
 
 ## Troubleshooting
 
@@ -990,11 +1274,31 @@ The Python signal detection mirrors your ToS script logic:
 - Update both `signal_detector.py` and `trading_bot.py`
 - Verify your `config.py` has the correct enable flags set
 
+### Kelly sizing contracts too high/low
+- Adjust `kelly_fraction` (0.25 = quarter Kelly is conservative)
+- Adjust `kelly_max_contracts` hard cap
+- Check `kelly_win_rate` matches your historical performance
+- Verify account balance is being read correctly
+
 ### No push notifications
 - Verify `PUSHOVER_USER_KEY` and `PUSHOVER_API_TOKEN` in `.env`
 - Test with: `python -c "from notifications import get_notifier; get_notifier().send('Test', 'Test')"`
 
 ## Changelog
+
+### v1.5 (January 8, 2026)
+- **NEW:** Economic calendar alerts via FMP API (FOMC, CPI, NFP, etc.)
+- **NEW:** Kelly Criterion position sizing for butterflies
+- **NEW:** `test_butterfly_order.py` script for testing live orders
+- **NEW:** TRIGGER (OTO) and SEQUENTIAL order methods with auto-fallback
+- **FIXED:** Option symbol format now uses correct 21-char OCC format (`SPXW  260109P05910000`)
+- **FIXED:** Butterfly target credit now used in order placement (was using theoretical)
+- **FIXED:** Butterfly quantity now dynamic via Kelly (was hardcoded to 1)
+- **FIXED:** Paper trading simulation now uses realistic delta decay
+- **FIXED:** Symbol-specific wing widths (5pt SPX, 1pt XSP/SPY)
+- **FIXED:** Fill verification polls order status for actual fill price
+- **IMPROVED:** Notifications show quantity, Kelly breakdown, and target comparison
+- **IMPROVED:** Logging shows full Kelly calculation and position sizing rationale
 
 ### v1.4 (January 8, 2026)
 - **FIXED:** VA now ready at market open - overnight/globex bars included for VA calculation
