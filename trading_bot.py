@@ -276,7 +276,7 @@ class TradingBot:
             # Uses FMP API if FMP_API_KEY is set, otherwise falls back to static data
             self.economic_calendar = EconomicCalendar(
                 api_key=os.getenv("FMP_API_KEY"),
-                notify_callback=lambda msg, title: self.notifier.send(msg, title=title)
+                notify_callback=lambda msg, title: self.notifier.send(title=title, message=msg)
             )
             logger.info("Economic calendar initialized")
             
