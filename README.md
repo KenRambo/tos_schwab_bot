@@ -261,29 +261,40 @@ Filters signals based on dealer gamma positioning to avoid trading against marke
 
 | Gamma Regime | Dealer Position | Market Behavior | Signal Filtering |
 |--------------|-----------------|-----------------|------------------|
-| **Positive** (above ZG) | Long gamma | Mean reversion | ✅ VAL/VAH signals, ❌ Breakouts blocked |
+| **Positive** (price ABOVE ZG) | Long gamma | Mean reversion | ✅ VAL/VAH signals, ❌ Breakouts blocked |
 | **Neutral** (near ZG) | Mixed | Choppy | ✅ All signals allowed |
-| **Negative** (below ZG) | Short gamma | Trending/momentum | ✅ All signals, ⚠️ Fades risky |
+| **Negative** (price BELOW ZG) | Short gamma | Trending/momentum | ✅ All signals, ⚠️ Fades risky |
 
 **How it works:**
-- Calculates Zero Gamma (ZG) level based on today's open price
-- ZG anchors near open early in day, drifts toward current price as day progresses
-- Above ZG = dealers fade moves (mean reversion works)
-- Below ZG = dealers chase moves (momentum works)
+- Zero Gamma (ZG) is the price level where dealer gamma exposure flips
+- Price ABOVE ZG = Positive gamma = dealers fade moves (mean reversion)
+- Price BELOW ZG = Negative gamma = dealers chase moves (momentum)
+
+**Automatic mode (default):**
+The bot automatically fetches the daily open from Schwab (including globex session for futures) and uses it to approximate ZG. This matches how ToS calculates it.
 
 ```bash
-# Gamma filter enabled by default
-./bot.sh start /ES -e SPX --butterfly
+# Just run - gamma filter uses automatic approximation
+./bot.sh butterfly /ES SPX
+```
 
-# Disable gamma filter
-./bot.sh start /ES -e SPX --butterfly --no-gamma
+**Manual override (most accurate):**
+For best accuracy, get real ZG from SpotGamma/Tradytics:
+```bash
+./bot.sh butterfly /ES SPX --zg 7005
+```
+
+**Disable entirely:**
+```bash
+./bot.sh butterfly /ES SPX --no-gamma
 ```
 
 **Log output:**
 ```
-  Gamma: 🟢 POSITIVE | ZG: $6955 | Bias: FADE MOVES
-  Levels: PUT₁ $6930 | ZG $6955 | CALL₁ $6980
-  Price vs ZG: $6968.75 (+13.75)
+  Gamma: Daily open (incl. globex) set to $7002.50
+  Gamma: 🔴 NEGATIVE | ZG: $7005 | Bias: RIDE MOMENTUM
+  Levels: PUT₁ $6980 | ZG $7005 | CALL₁ $7030
+  Price vs ZG: $6990.75 (-14.25)
 ```
 
 ## 🔧 Recent Bug Fixes (January 8, 2026)
@@ -510,6 +521,7 @@ Options:
   --contracts, -c N            Contracts per trade
   --max-trades, -m N           Max trades per day
   --cooldown N                 Signal cooldown in bars
+  --zg PRICE                   Manual Zero Gamma level (from SpotGamma/Tradytics)
   --no-gamma                   Disable gamma exposure filter
   --no-confirm, -y             Skip confirmation (for daemons)
   --log-file PATH              Custom log file

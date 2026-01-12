@@ -271,6 +271,9 @@ class TradingBot:
                     strike_width=self.config.signal.gamma_strike_width
                 )
                 logger.info("Gamma context initialized - signal filtering enabled")
+                
+                # Fetch daily open for gamma anchor (includes globex for futures)
+                self._fetch_and_set_daily_open()
             
             # Initialize economic calendar for event alerts
             # Uses FMP API if FMP_API_KEY is set, otherwise falls back to static data
@@ -339,6 +342,52 @@ class TradingBot:
         except Exception as e:
             logger.error(f"Initialization failed: {e}")
             return False
+    
+    def _fetch_and_set_daily_open(self) -> None:
+        """
+        Fetch daily open price from Schwab to use as gamma anchor.
+        
+        For futures like /ES, this includes the globex session open (6 PM ET previous day),
+        which matches how ToS calculates zero gamma.
+        """
+        if not self.gamma_context:
+            return
+        
+        try:
+            # Fetch daily candle for the signal symbol
+            symbol = self.config.trading.symbol
+            daily_data = self.client.get_price_history(
+                symbol=symbol,
+                period_type="day",
+                period=1,
+                frequency_type="daily",
+                frequency=1
+            )
+            
+            if daily_data and len(daily_data) > 0:
+                # Get the most recent daily candle
+                latest_daily = daily_data[-1]
+                daily_open = latest_daily.get('open', 0)
+                
+                if daily_open > 0:
+                    self.gamma_context.set_session_open(daily_open)
+                    logger.info(f"  Gamma: Daily open (incl. globex) set to ${daily_open:.2f}")
+                    
+                    # Also update gamma context with current price estimate
+                    daily_close = latest_daily.get('close', daily_open)
+                    self.gamma_context.update(daily_close, get_et_now())
+                    
+                    # Log initial gamma state
+                    if self.gamma_context.levels:
+                        self.gamma_context.log_status()
+                else:
+                    logger.warning("Daily open price is 0, gamma approximation may be inaccurate")
+            else:
+                logger.warning("No daily data available for gamma anchor")
+                
+        except Exception as e:
+            logger.warning(f"Could not fetch daily open for gamma: {e}")
+            logger.info("Gamma will use RTH open as fallback when first bar arrives")
     
     def _load_historical_bars(self):
         """Load historical bars to initialize the signal detector - INCLUDING OVERNIGHT for VA"""
@@ -796,14 +845,15 @@ class TradingBot:
             bar_time = bar.timestamp.time() if hasattr(bar.timestamp, 'time') else None
             if bar_time:
                 from datetime import time as dt_time
-                # First bar of RTH (9:30-9:35)
+                # First bar of RTH (9:30-9:35) - set as fallback if no daily open was fetched
                 if dt_time(9, 30) <= bar_time < dt_time(9, 35):
                     if self._today_open_price is None or bar.timestamp.date() != getattr(self, '_today_open_date', None):
                         self._today_open_price = bar.open
                         self._today_open_date = bar.timestamp.date()
-                        if self.gamma_context:
-                            self.gamma_context.set_today_open(bar.open)
-                            logger.info(f"  Gamma: Today's open set to ${bar.open:.2f}")
+                        # Only set gamma context open if we don't already have one from daily candle
+                        if self.gamma_context and self.gamma_context.session_open is None:
+                            self.gamma_context.set_session_open(bar.open)
+                            logger.info(f"  Gamma: RTH open fallback set to ${bar.open:.2f}")
         
         # Update gamma context with current price
         if self.gamma_context:
@@ -1047,6 +1097,13 @@ class TradingBot:
             try:
                 # Check for new trading day
                 self.tracker.new_trading_day()
+                
+                # Reset gamma context for new day if needed
+                today = date.today()
+                if self.gamma_context and getattr(self, '_gamma_date', None) != today:
+                    self._gamma_date = today
+                    self.gamma_context.session_open = None  # Reset so we refetch
+                    self._fetch_and_set_daily_open()
                 
                 # Check for scheduled reports (daily summary, weekly report)
                 self.tracker.check_scheduled_reports()
@@ -1335,6 +1392,13 @@ Running multiple symbols as daemons:
     )
     
     parser.add_argument(
+        '--zg',
+        type=float,
+        default=None,
+        help='Manual Zero Gamma level (recommended: get from SpotGamma/Tradytics)'
+    )
+    
+    parser.add_argument(
         '--log-file',
         type=str,
         default=None,
@@ -1413,6 +1477,12 @@ Running multiple symbols as daemons:
         print(f"  ✓ Gamma filter: DISABLED")
         overrides_applied = True
     
+    # Store manual ZG for later use (will be passed to GammaContext)
+    manual_zero_gamma = args.zg
+    if manual_zero_gamma:
+        print(f"  ✓ Manual Zero Gamma: ${manual_zero_gamma:.0f}")
+        overrides_applied = True
+    
     if not overrides_applied:
         print("  (none - using config defaults)")
     
@@ -1467,6 +1537,10 @@ Running multiple symbols as daemons:
     
     # Create and start bot
     bot = TradingBot(bot_config)
+    
+    # Apply manual Zero Gamma if specified
+    if manual_zero_gamma and bot.gamma_context:
+        bot.gamma_context.set_manual_zero_gamma(manual_zero_gamma)
     
     print(f"\n🚀 Starting {bot_config.trading.symbol} bot...")
     bot.start()

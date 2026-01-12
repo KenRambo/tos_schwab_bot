@@ -5,15 +5,18 @@ Approximates 0DTE gamma exposure levels for SPX/ES trading.
 Used to filter signals based on dealer gamma positioning.
 
 GAMMA REGIME BEHAVIOR:
-- Positive Gamma (above zero gamma): Dealers long gamma, mean reversion
+- Positive Gamma (price ABOVE zero gamma): Dealers long gamma, mean reversion
   → Favor: VAL bounce, VAH rejection (fade moves)
   → Avoid: Breakouts (will get faded)
   
-- Negative Gamma (below zero gamma): Dealers short gamma, momentum
+- Negative Gamma (price BELOW zero gamma): Dealers short gamma, momentum
   → Favor: Breakouts, breakdowns (ride momentum)
   → Avoid: Fading moves (will get run over)
 
 Based on the SPX 0DTE Gamma Exposure Approximation study.
+
+NOTE: For best results, use --zg flag to input real ZG from SpotGamma/Tradytics.
+The approximation formula is a rough estimate only.
 """
 
 import logging
@@ -26,8 +29,8 @@ logger = logging.getLogger(__name__)
 
 
 class GammaRegime(Enum):
-    POSITIVE = "POSITIVE"  # Above zero gamma - mean reversion
-    NEGATIVE = "NEGATIVE"  # Below zero gamma - momentum
+    POSITIVE = "POSITIVE"  # Price ABOVE zero gamma - mean reversion
+    NEGATIVE = "NEGATIVE"  # Price BELOW zero gamma - momentum
     NEUTRAL = "NEUTRAL"    # Near zero gamma - no edge
 
 
@@ -61,7 +64,13 @@ class GammaContext:
     Calculates and tracks gamma exposure context for trading decisions.
     
     Usage:
-        gamma = GammaContext(symbol="SPX", today_open=6900.0)
+        # With manual ZG (recommended - use real data from SpotGamma/Tradytics)
+        gamma = GammaContext(symbol="SPX", manual_zero_gamma=7005.0)
+        
+        # With approximation (less accurate)
+        gamma = GammaContext(symbol="SPX")
+        gamma.set_session_open(6950.0)  # Set at globex open or RTH open
+        
         gamma.update(current_price=6920.0, current_time=datetime.now())
         
         if gamma.regime == GammaRegime.POSITIVE:
@@ -78,7 +87,8 @@ class GammaContext:
     def __init__(
         self,
         symbol: str = "SPX",
-        today_open: Optional[float] = None,
+        manual_zero_gamma: Optional[float] = None,  # Manual ZG override (recommended)
+        session_open: Optional[float] = None,  # For approximation
         strike_width: int = 5,
         major_strike_width: int = 25,
         big_level_width: int = 50,
@@ -86,7 +96,8 @@ class GammaContext:
         enable_filtering: bool = True
     ):
         self.symbol = symbol
-        self.today_open = today_open
+        self.manual_zero_gamma = manual_zero_gamma
+        self.session_open = session_open  # Can be globex open or RTH open
         self.strike_width = strike_width
         self.major_strike_width = major_strike_width
         self.big_level_width = big_level_width
@@ -103,12 +114,25 @@ class GammaContext:
         self.time_remaining_pct: float = 1.0
         self.gamma_acceleration: float = 1.0
         
-        logger.info(f"GammaContext initialized for {symbol}")
+        if manual_zero_gamma:
+            logger.info(f"GammaContext initialized for {symbol} with manual ZG: ${manual_zero_gamma:.0f}")
+        else:
+            logger.info(f"GammaContext initialized for {symbol} (using approximation)")
     
+    def set_manual_zero_gamma(self, zg: float) -> None:
+        """Set manual zero gamma level (overrides approximation)"""
+        self.manual_zero_gamma = zg
+        logger.info(f"Manual Zero Gamma set: ${zg:.0f}")
+    
+    def set_session_open(self, open_price: float) -> None:
+        """Set session opening price for approximation (globex or RTH open)"""
+        self.session_open = open_price
+        logger.info(f"Session open set: ${open_price:.2f}")
+    
+    # Backwards compatibility
     def set_today_open(self, open_price: float) -> None:
-        """Set today's opening price (call at RTH open)"""
-        self.today_open = open_price
-        logger.info(f"Today's open set: ${open_price:.2f}")
+        """Alias for set_session_open for backwards compatibility"""
+        self.set_session_open(open_price)
     
     def update(self, current_price: float, current_time: Optional[datetime] = None) -> None:
         """Update gamma calculations with current price and time"""
@@ -149,6 +173,7 @@ class GammaContext:
         
         # Gamma acceleration (increases as day progresses)
         # Early: gamma spread wide, Late: gamma concentrated
+        # Match ToS: 1 / Sqrt(timeRemainingPct + 0.01)
         self.gamma_acceleration = 1.0 / (self.time_remaining_pct + 0.01) ** 0.5
     
     def _calculate_levels(self) -> GammaLevels:
@@ -157,19 +182,22 @@ class GammaContext:
             raise ValueError("Current price not set")
         
         # Zero gamma calculation
-        # Anchors near open early, drifts toward current price as day progresses
-        if self.today_open:
+        if self.manual_zero_gamma:
+            # Use manual override (most accurate)
+            zero_gamma = self.manual_zero_gamma
+        elif self.session_open:
+            # Approximation: anchor near session open, drift toward current price
+            # Match ToS: (sessionOpen * anchorWeight) + (close * (1 - anchorWeight))
             anchor_weight = self.time_remaining_pct
-            zero_gamma_raw = (self.today_open * anchor_weight) + \
+            zero_gamma_raw = (self.session_open * anchor_weight) + \
                            (self.current_price * (1 - anchor_weight))
+            zero_gamma = round(zero_gamma_raw / self.strike_width) * self.strike_width
         else:
-            zero_gamma_raw = self.current_price
-        
-        # Round to nearest strike
-        zero_gamma = round(zero_gamma_raw / self.strike_width) * self.strike_width
+            # No open set, use current price
+            zero_gamma = round(self.current_price / self.strike_width) * self.strike_width
         
         # Dynamic spacing based on time
-        # Wider early (gamma spread out), tighter late (gamma concentrated)
+        # Match ToS: Max(strikeWidth, Round((majorWidth / gammaAccel) / strikeWidth) * strikeWidth)
         base_spacing = self.major_strike_width
         dynamic_spacing = max(
             self.strike_width,
@@ -211,7 +239,12 @@ class GammaContext:
         )
     
     def _determine_regime(self) -> GammaRegime:
-        """Determine current gamma regime based on price vs zero gamma"""
+        """
+        Determine current gamma regime based on price vs zero gamma.
+        
+        Price ABOVE ZG = POSITIVE gamma (dealers long gamma, mean reversion)
+        Price BELOW ZG = NEGATIVE gamma (dealers short gamma, momentum)
+        """
         if not self.levels or not self.current_price:
             return GammaRegime.NEUTRAL
         
@@ -220,13 +253,19 @@ class GammaContext:
         if abs(distance) <= self.neutral_zone_points:
             return GammaRegime.NEUTRAL
         elif distance > 0:
+            # Price ABOVE zero gamma = POSITIVE gamma
             return GammaRegime.POSITIVE
         else:
+            # Price BELOW zero gamma = NEGATIVE gamma
             return GammaRegime.NEGATIVE
     
     def should_allow_signal(self, signal_type: str, direction: str) -> Tuple[bool, str]:
         """
         Check if a signal should be allowed based on gamma regime.
+        
+        Matches ToS logic:
+        - POSITIVE gamma: Allow mean reversion (VAL bounce, VAH rejection), BLOCK breakouts
+        - NEGATIVE gamma: Allow momentum (breakouts, breakdowns), warn on fades
         
         Args:
             signal_type: VAL_BOUNCE, VAH_REJECTION, BREAKOUT, BREAKDOWN, etc.
@@ -245,34 +284,36 @@ class GammaContext:
         direction = direction.upper()
         
         # Mean reversion signals (good in positive gamma)
-        mean_reversion_signals = {'VAL_BOUNCE', 'VAH_REJECTION', 'POC_RECLAIM', 'POC_BREAKDOWN'}
+        mean_reversion_signals = {'VAL_BOUNCE', 'VAH_REJECTION', 'POC_RECLAIM', 'POC_BREAKDOWN',
+                                   'PRIOR_VAL_BOUNCE', 'PRIOR_VAH_REJECTION', 'PRIOR_POC_RECLAIM', 'PRIOR_POC_BREAKDOWN'}
         
         # Momentum signals (good in negative gamma)
         momentum_signals = {'BREAKOUT', 'BREAKDOWN', 'SUSTAINED_BREAKOUT', 'SUSTAINED_BREAKDOWN'}
         
         if self.regime == GammaRegime.POSITIVE:
             # Positive gamma = mean reversion environment
+            # Match ToS: gammaAllowMomentum = no when inPositiveGamma
             if signal_type in mean_reversion_signals:
-                return True, f"✓ {signal_type} allowed in +gamma (mean reversion)"
+                return True, f"✓ {signal_type} allowed in +γ (mean reversion)"
             elif signal_type in momentum_signals:
-                return False, f"✗ {signal_type} blocked in +gamma (breakouts get faded)"
+                return False, f"✗ {signal_type} BLOCKED in +γ (breakouts get faded)"
             else:
                 return True, f"Unknown signal type {signal_type} - allowing"
         
         else:  # NEGATIVE gamma
             # Negative gamma = momentum environment
+            # Match ToS: gammaAllowMeanReversion = yes (but risky)
             if signal_type in momentum_signals:
-                return True, f"✓ {signal_type} allowed in -gamma (momentum)"
+                return True, f"✓ {signal_type} allowed in -γ (momentum)"
             elif signal_type in mean_reversion_signals:
-                # Still allow VAL/VAH signals but could be riskier
-                # For now, allow but log warning
-                logger.warning(f"⚠ {signal_type} in -gamma may be risky (momentum environment)")
-                return True, f"⚠ {signal_type} allowed in -gamma (use caution)"
+                # Still allow but warn - matches ToS "FADE RISKY" label
+                logger.warning(f"⚠ {signal_type} in -γ is RISKY (momentum environment)")
+                return True, f"⚠ {signal_type} allowed in -γ (FADE RISKY)"
             else:
                 return True, f"Unknown signal type {signal_type} - allowing"
     
     def get_bias(self) -> str:
-        """Get current bias string for display"""
+        """Get current bias string for display (matches ToS labels)"""
         if self.regime == GammaRegime.POSITIVE:
             return "FADE MOVES"
         elif self.regime == GammaRegime.NEGATIVE:
@@ -320,15 +361,22 @@ class GammaContext:
         }
     
     def log_status(self) -> None:
-        """Log current gamma status"""
+        """Log current gamma status (matches ToS label format)"""
         if not self.levels:
             logger.info("Gamma context not initialized")
             return
         
         zg = self.levels.zero_gamma
-        regime_emoji = "🟢" if self.regime == GammaRegime.POSITIVE else "🔴" if self.regime == GammaRegime.NEGATIVE else "⚪"
         
-        logger.info(f"  Gamma: {regime_emoji} {self.regime.value} | ZG: ${zg:.0f} | Bias: {self.get_bias()}")
+        # Match ToS emoji: γ+ green, γ- red
+        if self.regime == GammaRegime.POSITIVE:
+            regime_str = "🟢 POSITIVE"
+        elif self.regime == GammaRegime.NEGATIVE:
+            regime_str = "🔴 NEGATIVE"
+        else:
+            regime_str = "⚪ NEUTRAL"
+        
+        logger.info(f"  Gamma: {regime_str} | ZG: ${zg:.0f} | Bias: {self.get_bias()}")
         logger.info(f"  Levels: PUT₁ ${self.levels.put_gamma_1:.0f} | ZG ${zg:.0f} | CALL₁ ${self.levels.call_gamma_1:.0f}")
         
         if self.current_price:
@@ -339,12 +387,14 @@ class GammaContext:
 # Convenience function
 def create_gamma_context(
     symbol: str = "SPX",
-    today_open: Optional[float] = None,
+    manual_zero_gamma: Optional[float] = None,
+    session_open: Optional[float] = None,
     enable_filtering: bool = True
 ) -> GammaContext:
     """Create a GammaContext instance"""
     return GammaContext(
         symbol=symbol,
-        today_open=today_open,
+        manual_zero_gamma=manual_zero_gamma,
+        session_open=session_open,
         enable_filtering=enable_filtering
     )

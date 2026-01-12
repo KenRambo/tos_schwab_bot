@@ -166,7 +166,7 @@ class SignalConfig:
     signal_cooldown_bars: int = 17  # OPTIMIZED
     
     # Opening Range - OPTIMIZED
-    use_or_bias_filter: bool = True  # OPTIMIZED
+    use_or_bias_filter: bool = False  # OPTIMIZED
     or_buffer_points: float = 1.0
     
     # VIX Regime - OPTIMIZED
